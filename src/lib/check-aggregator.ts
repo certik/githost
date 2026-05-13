@@ -1,22 +1,23 @@
 /**
  * Aggregate a set of GitHub check runs that all belong to the SAME bucket
  * (quick or exhaustive) into a single bucket-level status that the UI displays
- * as one colored dot.
+ * as one colored dot/icon.
  *
  * Logic:
  *   1. Filter out runs we treat as "not really executed":
- *        - completed/skipped, completed/neutral, completed/stale
- *      These show on github.com as "Skipped" and shouldn't make a bucket green.
- *   2. After filtering, priority (highest first):
- *      - any "failed-ish" conclusion → "failed"
- *      - any in_progress             → "running"
- *      - any queued/pending/waiting/requested → "queued"
- *      - otherwise (all completed successfully) → "passed"
- *      - zero runs left → null (no row written → empty ring in UI)
+ *        completed/skipped, completed/neutral, completed/stale, completed/cancelled
+ *      These show on github.com as "Skipped"/"Cancelled" and shouldn't make
+ *      the bucket green.
+ *   2. Empty filtered set:
+ *        - if there WERE runs (all filtered) → "skipped"
+ *        - if there were ZERO runs to begin with → null (UI shows empty ring)
+ *   3. Priority within the filtered (real) runs:
+ *        - any "failed-ish" conclusion → "failed"
+ *        - any in_progress             → "running"
+ *        - any queued/pending/waiting/requested → "queued"
+ *        - otherwise (all completed successfully) → "passed"
  *
  * "Failed-ish" conclusions: failure, timed_out, action_required, startup_failure.
- * `cancelled` is filtered out at the failure check (it isn't a success either,
- * but it's a user/system action, not a test outcome — treat as "didn't run").
  */
 
 export type GhCheckStatus = "queued" | "in_progress" | "completed" | "waiting" | "pending" | "requested";
@@ -30,21 +31,23 @@ export interface GhCheckRun {
   conclusion: GhCheckConclusion | string | null;
 }
 
-export type AggregateStatus = "queued" | "running" | "passed" | "failed";
+export type AggregateStatus = "queued" | "running" | "passed" | "failed" | "skipped";
 
 const FAILED_CONCLUSIONS = new Set(["failure", "timed_out", "action_required", "startup_failure"]);
 const NOT_REALLY_EXECUTED = new Set(["skipped", "neutral", "stale", "cancelled"]);
 
 export function aggregateChecks(runs: readonly GhCheckRun[]): AggregateStatus | null {
-  // Drop "didn't actually run" outcomes. github.com shows these as "Skipped".
-  // If every run in a bucket falls into this set, the bucket as a whole hasn't
-  // run — we return null so the UI renders an empty ring rather than "passed".
+  if (runs.length === 0) return null;
+
   const effective = runs.filter((r) => {
     if (r.status !== "completed") return true;
     if (r.conclusion === null || r.conclusion === undefined) return true;
     return !NOT_REALLY_EXECUTED.has(String(r.conclusion));
   });
-  if (effective.length === 0) return null;
+  // There were runs but all were skipped/cancelled/etc → the bucket "ran but
+  // didn't really test anything". The UI shows a distinct skipped icon, which
+  // is different from "no rows at all" (null → empty ring).
+  if (effective.length === 0) return "skipped";
 
   if (effective.some((r) => r.status === "completed" && r.conclusion !== null && FAILED_CONCLUSIONS.has(String(r.conclusion)))) {
     return "failed";

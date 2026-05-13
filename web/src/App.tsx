@@ -138,29 +138,108 @@ function PrStateBadge({ pr }: { pr: PrSummary }) {
 }
 
 /**
- * GitHub-style status dot. Five visual states:
- *   - not queued: empty ring (gray border, no fill)
- *   - queued:     amber dot
- *   - running:    blue dot with pulsing animation
- *   - passed:     green dot
- *   - failed:     red dot
+ * GitHub-style status icons for the test buckets. Six visual states:
+ *   - not queued (run === null) : empty gray ring (no checks ran yet)
+ *   - queued                    : amber filled dot
+ *   - running                   : amber dot with a clockwise-rotating arc
+ *   - passed                    : green dot
+ *   - failed                    : red circle with white "x"
+ *   - skipped                   : gray ring with white center + gray "/"
  * Hovering shows the status + head_sha (when present).
  */
 function TestStatusDot({ run, label }: { run: TestRun | null; label: string }) {
   const status: TestStatus | null = run?.status ?? null;
-  let cls = "border border-zinc-300";
-  let humanStatus = "not queued";
-  if (status === "queued") { cls = "bg-amber-400"; humanStatus = "queued"; }
-  else if (status === "running") { cls = "bg-blue-500 animate-pulse"; humanStatus = "running"; }
-  else if (status === "passed") { cls = "bg-green-500"; humanStatus = "passed"; }
-  else if (status === "failed") { cls = "bg-red-500"; humanStatus = "failed"; }
+  let human = "not queued";
+  if (status === "queued") human = "queued";
+  else if (status === "running") human = "running";
+  else if (status === "passed") human = "passed";
+  else if (status === "failed") human = "failed";
+  else if (status === "skipped") human = "skipped";
 
-  let title = `${label}: ${humanStatus}`;
+  let title = `${label}: ${human}`;
   if (run?.headSha) title += ` @ ${run.headSha.slice(0, 7)}`;
-  const dot = <span className={`inline-block w-3 h-3 rounded-full ${cls}`} title={title} aria-label={title} />;
+
+  const icon = (
+    <span className="inline-flex items-center justify-center w-4 h-4" title={title} aria-label={title}>
+      {status === null && <NotQueuedIcon />}
+      {status === "queued" && <QueuedIcon />}
+      {status === "running" && <RunningIcon />}
+      {status === "passed" && <PassedIcon />}
+      {status === "failed" && <FailedIcon />}
+      {status === "skipped" && <SkippedIcon />}
+    </span>
+  );
+
   return run?.logUrl
-    ? <a href={run.logUrl} target="_blank" rel="noreferrer" className="inline-flex">{dot}</a>
-    : dot;
+    ? <a href={run.logUrl} target="_blank" rel="noreferrer" className="inline-flex">{icon}</a>
+    : icon;
+}
+
+function NotQueuedIcon() {
+  return <span className="w-3 h-3 rounded-full border border-zinc-300" />;
+}
+
+function QueuedIcon() {
+  return <span className="w-3 h-3 rounded-full bg-amber-400" />;
+}
+
+/**
+ * Layered "running" indicator:
+ *   - inner amber-400 dot, same size as the other status dots (12 px)
+ *   - amber-200 static track around it, with a visible gap to the inner dot
+ *   - amber-400 spinning arc on top of the track (same color as the dot)
+ *
+ * Everything is absolutely positioned in a 20×20 container so the dot and the
+ * SVG ring share the exact same pixel center (flex centering can produce a
+ * subpixel offset that makes the dot look drifted).
+ */
+function RunningIcon() {
+  return (
+    <span className="relative inline-block w-5 h-5">
+      <span
+        className="absolute rounded-full bg-amber-400"
+        style={{ width: "12px", height: "12px", left: "4px", top: "4px" }}
+      />
+      <svg className="absolute inset-0 w-5 h-5 block" viewBox="0 0 20 20" aria-hidden="true">
+        <circle cx="10" cy="10" r="9" fill="none" stroke="#fde68a" strokeWidth="2" />
+      </svg>
+      <svg className="absolute inset-0 w-5 h-5 block animate-spin" viewBox="0 0 20 20" aria-hidden="true">
+        <circle
+          cx="10" cy="10" r="9"
+          fill="none"
+          stroke="#f59e0b"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeDasharray="17 100"
+        />
+      </svg>
+    </span>
+  );
+}
+
+function PassedIcon() {
+  return <span className="w-3 h-3 rounded-full bg-green-500" />;
+}
+
+function FailedIcon() {
+  return (
+    <svg className="w-4 h-4" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="8" cy="8" r="7" fill="#ef4444" />
+      <path d="M5.5 5.5 L10.5 10.5 M10.5 5.5 L5.5 10.5"
+            stroke="white" strokeWidth="1.75" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function SkippedIcon() {
+  // Gray outer ring, white inner field, gray diagonal slash through the middle.
+  return (
+    <svg className="w-4 h-4" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="8" cy="8" r="7" fill="#9ca3af" />
+      <circle cx="8" cy="8" r="5" fill="white" />
+      <path d="M5 11 L11 5" stroke="#9ca3af" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
 }
 
 function PrDetail() {
