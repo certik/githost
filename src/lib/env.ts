@@ -28,6 +28,13 @@ export interface Env {
   GITHUB_OAUTH_CLIENT_SECRET: string;
   SESSION_SECRET: string;
   TOKEN_ENCRYPTION_KEY: string;
+
+  // Local-dev only — when set to "true", GET /auth/dev-login creates a session
+  // and signs you in as the user named in the `login` query param (default
+  // "dev"). Should ONLY be set in .dev.vars (which is git-ignored) — never in
+  // wrangler.toml [vars] and never via `wrangler secret put`. In production
+  // this is undefined, so /auth/dev-login 404s.
+  DEV_LOGIN_ENABLED?: string;
 }
 
 /**

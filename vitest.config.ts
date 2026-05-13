@@ -39,6 +39,9 @@ export default defineConfig(async () => {
             UPSTREAM_OWNER: "testorg",
             UPSTREAM_REPO: "testrepo",
             GITHUB_INSTALLATION_ID: "1",
+            // Force off by default. The tests for /auth/dev-login that need
+            // it enabled pass an env override into worker.fetch directly.
+            DEV_LOGIN_ENABLED: "",
           },
         },
       }),

@@ -131,6 +131,47 @@ authRoutes.post("/logout", async (c) => {
 });
 
 /**
+ * Local-dev escape hatch: skip GitHub OAuth, create a session, redirect to /.
+ *
+ *   GET /auth/dev-login                  → log in as user "dev"
+ *   GET /auth/dev-login?login=alice      → log in as user "alice"
+ *
+ * Gated entirely on `env.DEV_LOGIN_ENABLED === "true"`. That var is only ever
+ * set in `.dev.vars` (which is git-ignored). In production the var is
+ * undefined and this endpoint 404s — see the tests in
+ * `test/integration/dev-login.test.ts`.
+ *
+ * Bypasses the ALLOWED_GITHUB_LOGINS allowlist by design: in local dev you
+ * want to mint whatever login is convenient.
+ */
+authRoutes.get("/dev-login", async (c) => {
+  if (c.env.DEV_LOGIN_ENABLED !== "true") return c.notFound();
+
+  const login = (c.req.query("login") ?? "dev").slice(0, 39);  // GitHub login max length
+  const adb = appDb(c.env.APP_DB);
+  const now = new Date();
+
+  const existing = await adb.select().from(A.appUser).where(eq(A.appUser.login, login)).get();
+  const userId = existing?.id ?? crypto.randomUUID();
+  if (!existing) {
+    // Use a deterministic-ish gh_user_id so dev rows are stable across re-runs.
+    // 100000000+ is well above real GitHub user ids in our test data range.
+    const ghUserId = 100000000 + Math.floor(Math.random() * 1000000);
+    await adb.insert(A.appUser).values({ id: userId, ghUserId, login, createdAt: now }).run();
+  }
+
+  const sessionId = randomId(32);
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  await adb.insert(A.userSession).values({
+    id: sessionId, userId, expiresAt, createdAt: now,
+    userAgent: c.req.header("user-agent") ?? null,
+  }).run();
+
+  c.header("Set-Cookie", sessionCookie(sessionId, 30 * 24 * 60 * 60));
+  return c.redirect("/", 302);
+});
+
+/**
  * Static "signed out" splash page. Served as a regular Worker HTML response —
  * not part of the SPA — so logging out can drop the React tree (and its
  * cached PR data) without forcing the user through the GitHub OAuth round-trip
