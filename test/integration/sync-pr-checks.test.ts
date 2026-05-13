@@ -17,8 +17,7 @@ const OWNER = "testorg";
 const REPO = "testrepo";
 
 /**
- * Seed the check_kind_map with the same defaults migration 0003 ships in
- * prod. resetDbs() wipes the table so we re-seed per-test.
+ * Seed check_kind_map with the same defaults migration 0004 applies in prod.
  */
 async function seedDefaultMappings(): Promise<void> {
   const now = Date.now();
@@ -26,9 +25,9 @@ async function seedDefaultMappings(): Promise<void> {
     "INSERT INTO check_kind_map (id, pattern, kind, match_type, priority, created_at) VALUES (?, ?, ?, ?, ?, ?)"
   );
   for (const m of [
-    ["m1", "Test without LLVM Backend",               "quick",      "exact", 100],
-    ["m2", "Check Release build",                     "quick",      "exact", 100],
-    ["m3", "Test LLVM * (*)",                         "exhaustive", "glob",   50],
+    ["m1", "Quick checks / *",      "quick",      "glob", 100],
+    ["m2", "Exhaustive checks / *", "exhaustive", "glob", 100],
+    ["m3", "Test LLVM * (*)",       "exhaustive", "glob",  50],
   ] as const) {
     await stmt.bind(m[0], m[1], m[2], m[3], m[4], now).run();
   }
@@ -87,9 +86,11 @@ async function getPr(number: number): Promise<ApiPr | undefined> {
 }
 
 describe("syncPr → pr_test_run via check runs", () => {
-  it("buckets and aggregates check runs into quick (passed) and exhaustive (queued)", async () => {
+  it("buckets and aggregates check runs into quick (passed) and exhaustive (queued) using workflow names", async () => {
     await seedDefaultMappings();
     const headSha = "sha-100";
+    const QUICK_WF_ID = 1001;
+    const EXH_WF_ID = 1002;
 
     mswServer.use(
       http.post("https://api.github.com/app/installations/:id/access_tokens", () => {
@@ -98,14 +99,26 @@ describe("syncPr → pr_test_run via check runs", () => {
       http.get(`https://api.github.com/repos/${OWNER}/${REPO}/pulls/100`, () => {
         return HttpResponse.json(mockPullPayload({ number: 100, id: 1000, headSha }));
       }),
+      http.get(`https://api.github.com/repos/${OWNER}/${REPO}/actions/runs`, () => {
+        return HttpResponse.json({
+          workflow_runs: [
+            { id: QUICK_WF_ID, name: "Quick checks" },
+            { id: EXH_WF_ID,   name: "Exhaustive checks" },
+          ],
+        });
+      }),
       http.get(`https://api.github.com/repos/${OWNER}/${REPO}/commits/${headSha}/check-runs`, () => {
         return HttpResponse.json({
           total_count: 4,
           check_runs: [
-            { name: "Test without LLVM Backend", status: "completed",  conclusion: "success" },
-            { name: "Check Release build",       status: "completed",  conclusion: "success" },
-            { name: "Test LLVM 19 (ubuntu)",     status: "queued",     conclusion: null },
-            { name: "Test LLVM 22 (macos)",      status: "completed",  conclusion: "success" },
+            { name: "LFortran CI (OS=ubuntu-latest, LLVM=11)", status: "completed", conclusion: "success",
+              html_url: `https://github.com/${OWNER}/${REPO}/actions/runs/${QUICK_WF_ID}/job/9001` },
+            { name: "Build LFortran to WASM and Upload",       status: "completed", conclusion: "success",
+              html_url: `https://github.com/${OWNER}/${REPO}/actions/runs/${QUICK_WF_ID}/job/9002` },
+            { name: "Test LLVM 19 (ubuntu-latest)",            status: "queued",    conclusion: null,
+              html_url: `https://github.com/${OWNER}/${REPO}/actions/runs/${EXH_WF_ID}/job/9003` },
+            { name: "Test LLVM 22 (macos-latest)",             status: "completed", conclusion: "success",
+              html_url: `https://github.com/${OWNER}/${REPO}/actions/runs/${EXH_WF_ID}/job/9004` },
           ],
         });
       }),
@@ -122,6 +135,7 @@ describe("syncPr → pr_test_run via check runs", () => {
   it("flips a passed PR to failed on a new sync when checks fail", async () => {
     await seedDefaultMappings();
     const headSha = "sha-200";
+    const QUICK_WF_ID = 2001;
 
     const pull = http.get(`https://api.github.com/repos/${OWNER}/${REPO}/pulls/200`, () => {
       return HttpResponse.json(mockPullPayload({ number: 200, id: 2000, headSha }));
@@ -129,26 +143,29 @@ describe("syncPr → pr_test_run via check runs", () => {
     const tokens = http.post("https://api.github.com/app/installations/:id/access_tokens", () => {
       return HttpResponse.json({ token: "v1.test", expires_at: new Date(Date.now() + 3_600_000).toISOString() });
     });
+    const runs = http.get(`https://api.github.com/repos/${OWNER}/${REPO}/actions/runs`, () => {
+      return HttpResponse.json({ workflow_runs: [{ id: QUICK_WF_ID, name: "Quick checks" }] });
+    });
 
-    // First sync: all green.
     mswServer.use(
-      tokens, pull,
+      tokens, pull, runs,
       http.get(`https://api.github.com/repos/${OWNER}/${REPO}/commits/${headSha}/check-runs`, () => {
         return HttpResponse.json({ total_count: 1, check_runs: [
-          { name: "Test without LLVM Backend", status: "completed", conclusion: "success" },
+          { name: "LFortran CI (OS=ubuntu-latest, LLVM=11)", status: "completed", conclusion: "success",
+            html_url: `https://github.com/${OWNER}/${REPO}/actions/runs/${QUICK_WF_ID}/job/8001` },
         ]});
       }),
     );
     await syncPr(env, 1, 200);
     expect((await getPr(200))?.quickTest?.status).toBe("passed");
 
-    // Second sync: failure surfaced.
     mswServer.resetHandlers();
     mswServer.use(
-      tokens, pull,
+      tokens, pull, runs,
       http.get(`https://api.github.com/repos/${OWNER}/${REPO}/commits/${headSha}/check-runs`, () => {
         return HttpResponse.json({ total_count: 1, check_runs: [
-          { name: "Test without LLVM Backend", status: "completed", conclusion: "failure" },
+          { name: "LFortran CI (OS=ubuntu-latest, LLVM=11)", status: "completed", conclusion: "failure",
+            html_url: `https://github.com/${OWNER}/${REPO}/actions/runs/${QUICK_WF_ID}/job/8001` },
         ]});
       }),
     );
@@ -159,6 +176,7 @@ describe("syncPr → pr_test_run via check runs", () => {
   it("deletes a stale row when no checks bucket into the kind anymore", async () => {
     await seedDefaultMappings();
     const headSha = "sha-300";
+    const QUICK_WF_ID = 3001;
 
     // Seed a stale 'exhaustive' row directly.
     await env.APP_DB.prepare(
@@ -172,10 +190,14 @@ describe("syncPr → pr_test_run via check runs", () => {
       http.get(`https://api.github.com/repos/${OWNER}/${REPO}/pulls/300`, () => {
         return HttpResponse.json(mockPullPayload({ number: 300, id: 3000, headSha }));
       }),
+      http.get(`https://api.github.com/repos/${OWNER}/${REPO}/actions/runs`, () => {
+        return HttpResponse.json({ workflow_runs: [{ id: QUICK_WF_ID, name: "Quick checks" }] });
+      }),
       http.get(`https://api.github.com/repos/${OWNER}/${REPO}/commits/${headSha}/check-runs`, () => {
         // Only quick-bucket checks; nothing matches the exhaustive glob.
         return HttpResponse.json({ total_count: 1, check_runs: [
-          { name: "Test without LLVM Backend", status: "completed", conclusion: "success" },
+          { name: "LFortran CI (OS=ubuntu-latest, LLVM=11)", status: "completed", conclusion: "success",
+            html_url: `https://github.com/${OWNER}/${REPO}/actions/runs/${QUICK_WF_ID}/job/7001` },
         ]});
       }),
     );
@@ -186,9 +208,10 @@ describe("syncPr → pr_test_run via check runs", () => {
     expect(pr?.exhaustiveTest).toBeNull();         // stale row got deleted
   });
 
-  it("ignores check runs that don't match any mapping (e.g. 'Documentation')", async () => {
+  it("ignores check runs whose workflow name doesn't match any mapping", async () => {
     await seedDefaultMappings();
     const headSha = "sha-400";
+    const DOCS_WF_ID = 4001;
 
     mswServer.use(
       http.post("https://api.github.com/app/installations/:id/access_tokens", () => {
@@ -197,18 +220,65 @@ describe("syncPr → pr_test_run via check runs", () => {
       http.get(`https://api.github.com/repos/${OWNER}/${REPO}/pulls/400`, () => {
         return HttpResponse.json(mockPullPayload({ number: 400, id: 4000, headSha }));
       }),
+      http.get(`https://api.github.com/repos/${OWNER}/${REPO}/actions/runs`, () => {
+        return HttpResponse.json({ workflow_runs: [{ id: DOCS_WF_ID, name: "Documentation" }] });
+      }),
       http.get(`https://api.github.com/repos/${OWNER}/${REPO}/commits/${headSha}/check-runs`, () => {
         return HttpResponse.json({ total_count: 3, check_runs: [
-          { name: "Documentation",   status: "completed", conclusion: "success" },
-          { name: "Upload Tarball",  status: "completed", conclusion: "success" },
-          { name: "build-and-push-image", status: "completed", conclusion: "success" },
+          { name: "Build docs",   status: "completed", conclusion: "success",
+            html_url: `https://github.com/${OWNER}/${REPO}/actions/runs/${DOCS_WF_ID}/job/6001` },
+          { name: "Publish",      status: "completed", conclusion: "success",
+            html_url: `https://github.com/${OWNER}/${REPO}/actions/runs/${DOCS_WF_ID}/job/6002` },
         ]});
       }),
     );
     await syncPr(env, 1, 400);
 
     const pr = await getPr(400);
-    expect(pr?.quickTest).toBeNull();      // nothing matched
+    expect(pr?.quickTest).toBeNull();
     expect(pr?.exhaustiveTest).toBeNull();
+  });
+
+  it("matches the lfortran image fixture: 6 Quick checks workflow jobs all pass → quick=passed", async () => {
+    await seedDefaultMappings();
+    const headSha = "sha-500";
+    const QUICK_WF_ID = 5001;
+
+    const names = [
+      "Build LFortran to WASM and Upload",
+      "LFortran CI (OS=macos-latest, LLVM=11)",
+      "LFortran CI (OS=macos-latest, LLVM=21)",
+      "LFortran CI (OS=ubuntu-latest, LLVM=11)",
+      "LFortran CI (OS=ubuntu-latest, LLVM=21)",
+      "LFortran CI (OS=windows-2025, LLVM=11)",
+    ];
+
+    mswServer.use(
+      http.post("https://api.github.com/app/installations/:id/access_tokens", () => {
+        return HttpResponse.json({ token: "v1.test", expires_at: new Date(Date.now() + 3_600_000).toISOString() });
+      }),
+      http.get(`https://api.github.com/repos/${OWNER}/${REPO}/pulls/500`, () => {
+        return HttpResponse.json(mockPullPayload({ number: 500, id: 5000, headSha }));
+      }),
+      http.get(`https://api.github.com/repos/${OWNER}/${REPO}/actions/runs`, () => {
+        return HttpResponse.json({ workflow_runs: [{ id: QUICK_WF_ID, name: "Quick checks" }] });
+      }),
+      http.get(`https://api.github.com/repos/${OWNER}/${REPO}/commits/${headSha}/check-runs`, () => {
+        return HttpResponse.json({
+          total_count: names.length,
+          check_runs: names.map((name, i) => ({
+            name,
+            status: "completed",
+            conclusion: "success",
+            html_url: `https://github.com/${OWNER}/${REPO}/actions/runs/${QUICK_WF_ID}/job/${5100 + i}`,
+          })),
+        });
+      }),
+    );
+    await syncPr(env, 1, 500);
+
+    const pr = await getPr(500);
+    expect(pr?.quickTest?.status).toBe("passed");
+    expect(pr?.exhaustiveTest).toBeNull();    // no exhaustive checks for this PR
   });
 });

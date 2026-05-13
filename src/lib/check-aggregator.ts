@@ -23,6 +23,10 @@ export interface GhCheckRun {
   name: string;
   status: GhCheckStatus | string;
   conclusion: GhCheckConclusion | string | null;
+  /** Includes "/actions/runs/{workflow_run_id}/job/{job_id}" — we parse the
+   *  workflow_run_id out of this to join the check run to its workflow's name. */
+  html_url?: string | null;
+  details_url?: string | null;
 }
 
 export type AggregateStatus = "queued" | "running" | "passed" | "failed";

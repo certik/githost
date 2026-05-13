@@ -105,19 +105,39 @@ export async function syncPr(env: Env, _repoId: number, number: number): Promise
  *   - upsert pr_test_run row, OR delete the existing row if no checks match
  *     (keeps the UI in sync with upstream — no stale colors)
  *
- * Silent on a 404 from GitHub (the SHA may have just been force-pushed away).
+ * Matching is against the workflow-prefixed display name
+ * "<workflow_name> / <check_name>", so a single "Quick checks / *" glob can
+ * capture every job under the "Quick checks" workflow. We fetch
+ * /actions/runs?head_sha=:sha alongside the check runs to resolve each
+ * check_run.html_url's workflow_run_id → workflow_name.
+ *
+ * Silent on a 404 from /check-runs (the SHA may have been force-pushed away).
  */
 async function syncPrChecks(env: Env, prId: number, headSha: string): Promise<void> {
   const installationId = parseInt(env.GITHUB_INSTALLATION_ID, 10);
-  const res = await gh(env, {
+
+  const checkRes = await gh(env, {
     installationId,
     path: `/repos/${env.UPSTREAM_OWNER}/${env.UPSTREAM_REPO}/commits/${headSha}/check-runs?per_page=100`,
   });
-  if (!res.ok) {
-    if (res.status === 404) return;
-    throw new Error(`check-runs for ${headSha}: ${res.status} ${await res.text()}`);
+  if (!checkRes.ok) {
+    if (checkRes.status === 404) return;
+    throw new Error(`check-runs for ${headSha}: ${checkRes.status} ${await checkRes.text()}`);
   }
-  const data = await res.json<{ check_runs: GhCheckRun[] }>();
+  const checkData = await checkRes.json<{ check_runs: GhCheckRun[] }>();
+
+  // Build workflow_run_id → workflow_name map. If this call fails we proceed
+  // with bare check names (so matching against "Quick checks / *" won't match,
+  // but exact-name patterns still work).
+  const workflowsById = new Map<number, string>();
+  const runsRes = await gh(env, {
+    installationId,
+    path: `/repos/${env.UPSTREAM_OWNER}/${env.UPSTREAM_REPO}/actions/runs?head_sha=${headSha}&per_page=100`,
+  });
+  if (runsRes.ok) {
+    const runsData = await runsRes.json<{ workflow_runs?: Array<{ id: number; name: string }> }>();
+    for (const wr of runsData.workflow_runs ?? []) workflowsById.set(wr.id, wr.name);
+  }
 
   const adb = appDb(env.APP_DB);
   const mappingRows = await adb.select().from(A.checkKindMap).all();
@@ -126,8 +146,9 @@ async function syncPrChecks(env: Env, prId: number, headSha: string): Promise<vo
   }));
 
   const buckets: Record<"quick" | "exhaustive", GhCheckRun[]> = { quick: [], exhaustive: [] };
-  for (const run of data.check_runs ?? []) {
-    const kind = mapCheckToKind(run.name, mappings);
+  for (const run of checkData.check_runs ?? []) {
+    const displayName = buildDisplayName(run, workflowsById);
+    const kind = mapCheckToKind(displayName, mappings);
     if (kind === "quick" || kind === "exhaustive") buckets[kind].push(run);
   }
 
@@ -135,7 +156,6 @@ async function syncPrChecks(env: Env, prId: number, headSha: string): Promise<vo
   for (const kind of ["quick", "exhaustive"] as const) {
     const status = aggregateChecks(buckets[kind]);
     if (status === null) {
-      // No matching checks — drop any stale row so the UI shows an empty ring.
       await adb.delete(A.prTestRun)
         .where(and(eq(A.prTestRun.prId, prId), eq(A.prTestRun.kind, kind)))
         .run();
@@ -148,4 +168,17 @@ async function syncPrChecks(env: Env, prId: number, headSha: string): Promise<vo
       set: { status, headSha, updatedAt: now },
     }).run();
   }
+}
+
+/**
+ * Reconstruct the "<workflow_name> / <check_name>" display name shown in the
+ * GitHub UI. Falls back to the bare check name if we can't resolve a workflow.
+ */
+function buildDisplayName(run: GhCheckRun, workflowsById: Map<number, string>): string {
+  const url = run.html_url ?? run.details_url ?? "";
+  const match = url.match(/\/actions\/runs\/(\d+)\//);
+  if (!match) return run.name;
+  const wfRunId = parseInt(match[1]!, 10);
+  const wfName = workflowsById.get(wfRunId);
+  return wfName ? `${wfName} / ${run.name}` : run.name;
 }
