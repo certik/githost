@@ -175,4 +175,58 @@ describe("webhook fan-out: pull_request still works (regression guard)", () => {
     await new Promise((r) => setTimeout(r, 50));
     expect(calls).toEqual([7]);
   });
+
+  // Bug we hit in prod: merging a PR upstream didn't update the mirror DB
+  // without manual refresh. Root cause: webhook handler dispatched
+  // sync.pr via ctx.waitUntil(...), which CF was cancelling before the D1
+  // commit. handleWebhook now awaits the sync inline, so by the time
+  // dispatch() returns, the row IS committed.
+  it("persists state=closed, merged=1 by the time dispatch() returns (no waitUntil race)", async () => {
+    // Mock GitHub to return the merged PR detail.
+    mswServer.use(
+      http.post("https://api.github.com/app/installations/:id/access_tokens", () => {
+        return HttpResponse.json({ token: "v1.test", expires_at: new Date(Date.now() + 3_600_000).toISOString() });
+      }),
+      http.get(`https://api.github.com/repos/${OWNER}/${REPO}/pulls/4242`, () => {
+        return HttpResponse.json({
+          id: 9999, number: 4242, state: "closed", draft: false, merged: true,
+          mergeable: null, mergeable_state: "unknown",
+          title: "Merged upstream", body: null,
+          user: { id: 1, login: "alice", avatar_url: null, html_url: null, type: "User" },
+          head: { ref: "feat", sha: "sha-merged" },
+          base: { ref: "main", sha: "main-sha", repo: { id: 1, owner: { login: OWNER }, name: REPO, default_branch: "main" } },
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-05-13T15:25:32Z",
+          closed_at: "2026-05-13T15:25:32Z",
+          merged_at: "2026-05-13T15:25:32Z",
+          labels: [],
+        });
+      }),
+      http.get(`https://api.github.com/repos/${OWNER}/${REPO}/commits/sha-merged/check-runs`, () => {
+        return HttpResponse.json({ total_count: 0, check_runs: [] });
+      }),
+    );
+
+    // Simulate the GH `pull_request action=closed` delivery.
+    await dispatch({
+      type: "github.webhook",
+      event: "pull_request",
+      deliveryId: "merge-test",
+      payload: {
+        repository: { id: 1 },
+        action: "closed",
+        pull_request: { number: 4242, merged: true, state: "closed" },
+      },
+    }, env, ctx);
+
+    // CRITICAL: do NOT add a setTimeout here. If the await chain works,
+    // the DB row should already reflect the merged state by the time
+    // dispatch() returns. If it doesn't, the test fails — that's exactly
+    // the prod bug we're guarding against.
+    const row = await env.MIRROR_DB.prepare(
+      "SELECT state, merged FROM pr WHERE number = 4242"
+    ).first<{ state: string; merged: number }>();
+    expect(row?.state).toBe("closed");
+    expect(row?.merged).toBe(1);
+  });
 });
