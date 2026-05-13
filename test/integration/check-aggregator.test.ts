@@ -36,6 +36,47 @@ describe("aggregateChecks", () => {
     }
   });
 
+  it("treats skipped checks as 'not really run' — null if all are skipped", () => {
+    expect(aggregateChecks([
+      run("a", "completed", "skipped"),
+      run("b", "completed", "skipped"),
+    ])).toBeNull();
+  });
+
+  it("ignores skipped checks when computing the bucket status", () => {
+    // The lfortran #11484 scenario: 8 skipped checks fell into the exhaustive
+    // bucket. Pre-fix the bucket aggregated to "passed"; now it must be null.
+    expect(aggregateChecks([
+      run("Test LLVM ...",                "completed", "skipped"),
+      run("build-and-push-image",         "completed", "skipped"),
+      run("Documentation",                "completed", "skipped"),
+      run("Check Out-of-Source Debug…",   "completed", "skipped"),
+      run("Upload Tarball",               "completed", "skipped"),
+      run("Check Release build",          "completed", "skipped"),
+      run("Test without LLVM Backend",    "completed", "skipped"),
+      run("Test MLIR backend",            "completed", "skipped"),
+    ])).toBeNull();
+  });
+
+  it("treats cancelled as 'not really run' (single cancelled → null)", () => {
+    expect(aggregateChecks([run("a", "completed", "cancelled")])).toBeNull();
+  });
+
+  it("treats neutral and stale as 'not really run'", () => {
+    expect(aggregateChecks([
+      run("a", "completed", "neutral"),
+      run("b", "completed", "stale"),
+    ])).toBeNull();
+  });
+
+  it("a single passing check next to skipped checks → passed", () => {
+    expect(aggregateChecks([
+      run("a", "completed", "success"),
+      run("b", "completed", "skipped"),
+      run("c", "completed", "skipped"),
+    ])).toBe("passed");
+  });
+
   it("returns running if any in_progress AND no failures", () => {
     expect(aggregateChecks([
       run("a", "completed", "success"),
@@ -64,9 +105,16 @@ describe("aggregateChecks", () => {
     ])).toBe("running");
   });
 
-  it("treats cancelled / skipped / neutral / stale as benign", () => {
-    // These conclusions don't mark the bucket as failed; if everything else
-    // is good, the bucket is passed.
+  it("treats cancelled / skipped / neutral / stale as not-really-run (filtered out)", () => {
+    // These conclusions don't make the bucket green. Together they should
+    // produce null (the bucket as a whole hasn't run).
+    expect(aggregateChecks([
+      run("b", "completed", "cancelled"),
+      run("c", "completed", "skipped"),
+      run("d", "completed", "neutral"),
+      run("e", "completed", "stale"),
+    ])).toBeNull();
+    // But a single real success carries the bucket.
     expect(aggregateChecks([
       run("a", "completed", "success"),
       run("b", "completed", "cancelled"),
