@@ -8,25 +8,34 @@
 INSERT OR REPLACE INTO pr_test_run
   (pr_id, kind,         status,    head_sha,   log_url,                      updated_at)
 VALUES
-  -- Priority 0 (CI-green, highlighted box)
+  -- Priority 0 (CI-green + mergeable, highlighted box)
   (101, 'quick',      'passed',  'sha-101', 'https://example.com/log/1q',  1700000000000),
   (101, 'exhaustive', 'passed',  'sha-101', 'https://example.com/log/1e',  1700000000000),
   (107, 'quick',      'passed',  'sha-107', NULL,                          1700000000000),
   (107, 'exhaustive', 'passed',  'sha-107', NULL,                          1700000000000),
+  -- Also in priority 0: CI-green with mergeable=null (unknown, optimistic-green)
+  (113, 'quick',      'passed',  'sha-113', NULL,                          1700000000000),
+  (113, 'exhaustive', 'passed',  'sha-113', NULL,                          1700000000000),
 
-  -- Priority 1: quick passed, exhaustive running
+  -- Priority 1 (CI-green BUT merge conflict, amber box)
+  (114, 'quick',      'passed',  'sha-114', NULL,                          1700000000000),
+  (114, 'exhaustive', 'passed',  'sha-114', NULL,                          1700000000000),
+  (115, 'quick',      'passed',  'sha-115', NULL,                          1700000000000),
+  (115, 'exhaustive', 'passed',  'sha-115', NULL,                          1700000000000),
+
+  -- Priority 2: quick passed, exhaustive running
   (108, 'quick',      'passed',  'sha-108', NULL,                          1700000000000),
   (108, 'exhaustive', 'running', 'sha-108', NULL,                          1700000000000),
 
-  -- Priority 2: quick passed, exhaustive queued
+  -- Priority 3: quick passed, exhaustive queued
   (109, 'quick',      'passed',  'sha-109', NULL,                          1700000000000),
   (109, 'exhaustive', 'queued',  'sha-109', NULL,                          1700000000000),
 
-  -- Priority 3: quick passed, exhaustive skipped
+  -- Priority 4: quick passed, exhaustive skipped
   (103, 'quick',      'passed',  'sha-103', NULL,                          1700000000000),
   (103, 'exhaustive', 'skipped', 'sha-103', NULL,                          1700000000000),
 
-  -- Priority 5: quick passed, exhaustive failed
+  -- Priority 6: quick passed, exhaustive failed
   (110, 'quick',      'passed',  'sha-110', NULL,                          1700000000000),
   (110, 'exhaustive', 'failed',  'sha-110', 'https://example.com/log/exh', 1700000000000),
 

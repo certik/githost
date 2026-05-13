@@ -9,15 +9,15 @@
  *
  * The exact priority schedule the UI relies on:
  *
- *   Group key                                  | priority | label
- *   -------------------------------------------|----------|--------------------------
+ *   Group key                                            | priority | label
+ *   -----------------------------------------------------|----------|-------
  *   quick=passed + exhaustive=passed + mergeable ≠ false |  0  | "Quick + Exhaustive passed" (green box)
- *   quick=passed + exhaustive=passed + mergeable = false |  6  | "Quick + Exhaustive passed (merge conflict)" (amber box)
- *   quick=passed + exhaustive=running   |  1  | "Quick passed · Exhaustive running"
- *   quick=passed + exhaustive=queued    |  2  | "Quick passed · Exhaustive queued"
- *   quick=passed + exhaustive=skipped   |  3  | "Quick passed · Exhaustive skipped"
- *   quick=passed + exhaustive=null      |  4  | "Quick passed · Exhaustive not run"
- *   quick=passed + exhaustive=failed    |  5  | "Quick passed · Exhaustive failed"
+ *   quick=passed + exhaustive=passed + mergeable = false |  1  | "Quick + Exhaustive passed (merge conflict)" (amber box)
+ *   quick=passed + exhaustive=running   |  2  | "Quick passed · Exhaustive running"
+ *   quick=passed + exhaustive=queued    |  3  | "Quick passed · Exhaustive queued"
+ *   quick=passed + exhaustive=skipped   |  4  | "Quick passed · Exhaustive skipped"
+ *   quick=passed + exhaustive=null      |  5  | "Quick passed · Exhaustive not run"
+ *   quick=passed + exhaustive=failed    |  6  | "Quick passed · Exhaustive failed"
  *   quick=running                       | 10  | "Quick running"
  *   quick=queued | null                 | 20  | "Quick queued / not run"
  *   quick=skipped                       | 25  | "Quick skipped"
@@ -69,12 +69,12 @@ export function priorityOf(pr: PrLike): number {
   const q = pr.quickTest?.status ?? null;
   const e = pr.exhaustiveTest?.status ?? null;
   if (q === "passed") {
-    if (e === "passed")  return hasMergeConflict(pr) ? 6 : 0;
-    if (e === "running") return 1;
-    if (e === "queued")  return 2;
-    if (e === "skipped") return 3;
-    if (e === "failed")  return 5;
-    return 4;                          // null / unknown
+    if (e === "passed")  return hasMergeConflict(pr) ? 1 : 0;
+    if (e === "running") return 2;
+    if (e === "queued")  return 3;
+    if (e === "skipped") return 4;
+    if (e === "failed")  return 6;
+    return 5;                          // null / unknown
   }
   if (q === "running") return 10;
   if (q === "queued" || q === null) return 20;
@@ -86,12 +86,12 @@ export function priorityOf(pr: PrLike): number {
 export function labelOf(priority: number): string {
   switch (priority) {
     case 0:  return "Quick + Exhaustive passed";
-    case 1:  return "Quick passed · Exhaustive running";
-    case 2:  return "Quick passed · Exhaustive queued";
-    case 3:  return "Quick passed · Exhaustive skipped";
-    case 4:  return "Quick passed · Exhaustive not run";
-    case 5:  return "Quick passed · Exhaustive failed";
-    case 6:  return "Quick + Exhaustive passed (merge conflict)";
+    case 1:  return "Quick + Exhaustive passed (merge conflict)";
+    case 2:  return "Quick passed · Exhaustive running";
+    case 3:  return "Quick passed · Exhaustive queued";
+    case 4:  return "Quick passed · Exhaustive skipped";
+    case 5:  return "Quick passed · Exhaustive not run";
+    case 6:  return "Quick passed · Exhaustive failed";
     case 10: return "Quick running";
     case 20: return "Quick queued / not run";
     case 25: return "Quick skipped";
@@ -133,7 +133,7 @@ export function groupForReviewPriority<P extends PrLike>(prs: readonly P[]): Rev
       key,
       label: labelOf(key),
       highlight: key === 0,
-      warn: key === 6,
+      warn: key === 1,
       items,
     };
   });

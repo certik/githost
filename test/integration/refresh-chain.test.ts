@@ -98,7 +98,7 @@ function installPrDetail(detail: MockPrDetail): void {
   );
 }
 
-async function seedMirrorPr(opts: { id: number; number: number; updatedAt: number; state?: string; merged?: boolean }): Promise<void> {
+async function seedMirrorPr(opts: { id: number; number: number; updatedAt: number; state?: string; merged?: boolean; mergeable?: boolean | null }): Promise<void> {
   // Repo + user have to exist (FK).
   await env.MIRROR_DB.prepare(
     "INSERT OR IGNORE INTO repo (id, owner, name, default_branch) VALUES (1, ?, ?, 'main')"
@@ -106,12 +106,17 @@ async function seedMirrorPr(opts: { id: number; number: number; updatedAt: numbe
   await env.MIRROR_DB.prepare(
     "INSERT OR IGNORE INTO user (id, login) VALUES (1, 'alice')"
   ).run();
+  // Default to mergeable=true so the watermark works in tests (open PRs with
+  // mergeable IS NULL are flagged as stale for the one-time backfill).
+  const mergeable = opts.mergeable === undefined ? 1
+    : opts.mergeable === null ? null
+    : opts.mergeable ? 1 : 0;
   await env.MIRROR_DB.prepare(
-    `INSERT INTO pr (id, repo_id, number, state, draft, merged, title, body, author_id, head_ref, head_sha, base_ref, base_sha, created_at, updated_at)
-     VALUES (?, 1, ?, ?, 0, ?, ?, NULL, 1, 'feature', ?, 'main', 'main-sha', ?, ?)`
+    `INSERT INTO pr (id, repo_id, number, state, draft, merged, mergeable, title, body, author_id, head_ref, head_sha, base_ref, base_sha, created_at, updated_at)
+     VALUES (?, 1, ?, ?, 0, ?, ?, ?, NULL, 1, 'feature', ?, 'main', 'main-sha', ?, ?)`
   ).bind(
     opts.id, opts.number, opts.state ?? "open", opts.merged ? 1 : 0,
-    `PR ${opts.number}`, `sha-${opts.number}`, opts.updatedAt, opts.updatedAt,
+    mergeable, `PR ${opts.number}`, `sha-${opts.number}`, opts.updatedAt, opts.updatedAt,
   ).run();
 }
 
@@ -135,6 +140,38 @@ describe("refreshPrsBatch", () => {
     ).first<{ state: string; merged: number }>();
     expect(row?.state).toBe("closed");
     expect(row?.merged).toBe(1);
+  });
+
+  it("treats open PRs with mergeable IS NULL as stale (one-time backfill after the mergeable column was added)", async () => {
+    // Mirror row: open, updated_at is current, but mergeable IS NULL
+    // (simulating an existing row from before migration 0002 ran).
+    const ts = "2026-05-13T12:00:00Z";
+    const ms = Date.parse(ts);
+    await seedMirrorPr({ id: 555, number: 555, updatedAt: ms, mergeable: null });
+
+    installTokenHandler();
+    installListHandler([{ id: 555, number: 555, updated_at: ts }]);
+    installPrDetail(mockDetail({ id: 555, number: 555, merged: false, updated_at: ts }));
+
+    const result = await refreshPrsBatch(env, 1);
+    // We did re-fetch — even though updated_at matched, mergeable was null.
+    expect(result.processed).toBe(1);
+    expect(result.skipped).toBe(0);
+  });
+
+  it("does NOT treat closed/merged PRs as stale even when mergeable IS NULL", async () => {
+    // mergeable is null for closed PRs in GH — that's normal, not stale.
+    const ts = "2026-05-13T12:00:00Z";
+    const ms = Date.parse(ts);
+    await seedMirrorPr({ id: 777, number: 777, updatedAt: ms, state: "closed", merged: true, mergeable: null });
+
+    installTokenHandler();
+    installListHandler([{ id: 777, number: 777, updated_at: ts }]);
+    // No PR-detail handler → if syncPr ran, MSW would throw. That's the assertion.
+
+    const result = await refreshPrsBatch(env, 1);
+    expect(result.processed).toBe(0);
+    expect(result.skipped).toBe(1);
   });
 
   it("skips PRs whose mirror updated_at >= GitHub updated_at (watermark)", async () => {

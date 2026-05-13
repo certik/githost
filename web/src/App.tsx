@@ -207,9 +207,10 @@ function PrList({ signedIn }: { signedIn: boolean }) {
 /** Header row used at the top of every PR list view, shared for column alignment. */
 function PrListHeader() {
   return (
-    <li className="px-4 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 grid grid-cols-[1fr_8rem_4.5rem_4.5rem] gap-3 items-center">
+    <li className="px-4 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 grid grid-cols-[1fr_8rem_3rem_4.5rem_4.5rem] gap-3 items-center">
       <span>Pull request</span>
       <span>State</span>
+      <span className="text-center" title="Mergeable status from GitHub">Merge</span>
       <span className="text-center" title="Quick tests">Quick</span>
       <span className="text-center" title="Exhaustive tests">Exhaustive</span>
     </li>
@@ -218,15 +219,58 @@ function PrListHeader() {
 
 function PrRow({ p }: { p: PrSummary }) {
   return (
-    <li className="px-4 py-3 hover:bg-zinc-50 grid grid-cols-[1fr_8rem_4.5rem_4.5rem] gap-3 items-center">
+    <li className="px-4 py-3 hover:bg-zinc-50 grid grid-cols-[1fr_8rem_3rem_4.5rem_4.5rem] gap-3 items-center">
       <a href={p.htmlUrl} target="_blank" rel="noreferrer" className="flex items-baseline gap-2 min-w-0">
         <span className="text-zinc-900 font-medium truncate hover:underline">{p.title}</span>
         <span className="text-zinc-500 text-xs whitespace-nowrap">#{p.number} by {p.authorLogin ?? "?"}</span>
       </a>
       <span><PrStateBadge pr={p} /></span>
+      <span className="flex justify-center"><MergeableIndicator pr={p} /></span>
       <span className="flex justify-center"><TestStatusDot run={p.quickTest} label="Quick" /></span>
       <span className="flex justify-center"><TestStatusDot run={p.exhaustiveTest} label="Exhaustive" /></span>
     </li>
+  );
+}
+
+/**
+ * Renders a 16×16 icon showing whether a PR is mergeable per GitHub:
+ *   - true  → green check (clean merge possible)
+ *   - false → red X (merge conflict, needs rebase)
+ *   - null  → gray "?" (GH still computing, or PR is closed/merged)
+ *
+ * For merged/closed PRs we suppress the indicator entirely since merging
+ * is no longer relevant.
+ */
+function MergeableIndicator({ pr }: { pr: PrSummary }) {
+  if (pr.state === "closed" || pr.merged) {
+    return <span className="text-zinc-300" title="Not relevant (PR is closed)">—</span>;
+  }
+  if (pr.mergeable === true) {
+    return (
+      <svg viewBox="0 0 16 16" className="w-4 h-4 text-green-600"
+        role="img" aria-label="Mergeable">
+        <title>{`Mergeable (${pr.mergeableState ?? "clean"})`}</title>
+        <path d="M3 8.5L6.5 12L13 4.5" stroke="currentColor" strokeWidth="2.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+  if (pr.mergeable === false) {
+    return (
+      <svg viewBox="0 0 16 16" className="w-4 h-4 text-red-600"
+        role="img" aria-label="Merge conflict">
+        <title>{`Merge conflict (${pr.mergeableState ?? "dirty"})`}</title>
+        <path d="M4 4L12 12M12 4L4 12" stroke="currentColor" strokeWidth="2.5" fill="none" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  // mergeable === null: GH still computing, OR we haven't synced this PR
+  // since the column was added. Will resolve on the next webhook / refresh.
+  return (
+    <svg viewBox="0 0 16 16" className="w-4 h-4 text-zinc-400"
+      role="img" aria-label="Mergeable status unknown">
+      <title>Mergeable status unknown — GitHub is computing or sync pending</title>
+      <text x="8" y="13" textAnchor="middle" fontSize="14" fill="currentColor" fontWeight="bold" fontFamily="system-ui">?</text>
+    </svg>
   );
 }
 

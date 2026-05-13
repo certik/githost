@@ -33,7 +33,7 @@ describe("priorityOf", () => {
     expect(priorityOf(pr({ quick: "passed", exhaustive: "passed" }))).toBe(0);
   });
 
-  it("orders quick=passed sub-buckets correctly: passed < running < queued < skipped < null < failed", () => {
+  it("orders quick=passed sub-buckets correctly: passed < running < queued < skipped < null < failed (with conflict slotted between passed and running)", () => {
     const order = [
       pr({ quick: "passed", exhaustive: "passed" }),
       pr({ quick: "passed", exhaustive: "running" }),
@@ -43,7 +43,7 @@ describe("priorityOf", () => {
       pr({ quick: "passed", exhaustive: "failed" }),
     ];
     const priorities = order.map(priorityOf);
-    expect(priorities).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(priorities).toEqual([0, 2, 3, 4, 5, 6]);
   });
 
   it("quick=running ranks above any non-quick-passed state", () => {
@@ -84,8 +84,8 @@ describe("hasMergeConflict / mergeable handling", () => {
     expect(hasMergeConflict(pr({}))).toBe(false);  // undefined
   });
 
-  it("Quick+Exhaustive passed + mergeable=false → bucket 6 (not 0)", () => {
-    expect(priorityOf(pr({ quick: "passed", exhaustive: "passed", mergeable: false }))).toBe(6);
+  it("Quick+Exhaustive passed + mergeable=false → bucket 1 (right under green)", () => {
+    expect(priorityOf(pr({ quick: "passed", exhaustive: "passed", mergeable: false }))).toBe(1);
   });
 
   it("Quick+Exhaustive passed + mergeable=true → bucket 0 (green)", () => {
@@ -97,17 +97,18 @@ describe("hasMergeConflict / mergeable handling", () => {
   });
 
   it("merge conflict does NOT affect priority when CI isn't both-green", () => {
-    // A PR that's quick=passed/exhaustive=queued stays in bucket 2 regardless
-    // of mergeable — conflict info is only relevant once CI is fully green.
-    expect(priorityOf(pr({ quick: "passed", exhaustive: "queued", mergeable: false }))).toBe(2);
+    // A PR that's quick=passed/exhaustive=queued stays in its CI bucket
+    // regardless of mergeable — conflict info is only relevant once CI is
+    // fully green.
+    expect(priorityOf(pr({ quick: "passed", exhaustive: "queued", mergeable: false }))).toBe(3);
     expect(priorityOf(pr({ quick: "failed", mergeable: false }))).toBe(30);
   });
 
-  it("groupForReviewPriority puts mergeable=false PRs in bucket 6 with warn=true", () => {
+  it("groupForReviewPriority puts mergeable=false PRs in bucket 1 with warn=true, right under green", () => {
     const green   = pr({ quick: "passed", exhaustive: "passed", mergeable: true });
     const conflict = pr({ quick: "passed", exhaustive: "passed", mergeable: false });
     const { ready } = groupForReviewPriority([green, conflict]);
-    expect(ready.map((g) => g.key)).toEqual([0, 6]);
+    expect(ready.map((g) => g.key)).toEqual([0, 1]);
     expect(ready[0]?.highlight).toBe(true);
     expect(ready[0]?.warn).toBe(false);
     expect(ready[1]?.highlight).toBe(false);
@@ -116,19 +117,20 @@ describe("hasMergeConflict / mergeable handling", () => {
     expect(ready[1]?.items.map((p) => p.id)).toEqual([conflict.id]);
   });
 
-  it("labelOf(6) describes the merge-conflict case", () => {
-    expect(labelOf(6)).toBe("Quick + Exhaustive passed (merge conflict)");
+  it("labelOf(1) describes the merge-conflict case", () => {
+    expect(labelOf(1)).toBe("Quick + Exhaustive passed (merge conflict)");
   });
 });
 
 describe("labelOf", () => {
   it("returns the expected label for each priority key", () => {
     expect(labelOf(0)).toBe("Quick + Exhaustive passed");
-    expect(labelOf(1)).toBe("Quick passed · Exhaustive running");
-    expect(labelOf(2)).toBe("Quick passed · Exhaustive queued");
-    expect(labelOf(3)).toBe("Quick passed · Exhaustive skipped");
-    expect(labelOf(4)).toBe("Quick passed · Exhaustive not run");
-    expect(labelOf(5)).toBe("Quick passed · Exhaustive failed");
+    expect(labelOf(1)).toBe("Quick + Exhaustive passed (merge conflict)");
+    expect(labelOf(2)).toBe("Quick passed · Exhaustive running");
+    expect(labelOf(3)).toBe("Quick passed · Exhaustive queued");
+    expect(labelOf(4)).toBe("Quick passed · Exhaustive skipped");
+    expect(labelOf(5)).toBe("Quick passed · Exhaustive not run");
+    expect(labelOf(6)).toBe("Quick passed · Exhaustive failed");
     expect(labelOf(10)).toBe("Quick running");
     expect(labelOf(20)).toBe("Quick queued / not run");
     expect(labelOf(25)).toBe("Quick skipped");
@@ -205,7 +207,7 @@ describe("groupForReviewPriority", () => {
       pr({ quick: "failed" }),
     ]);
     expect(ready.find((g) => g.key === 0)?.label).toBe("Quick + Exhaustive passed");
-    expect(ready.find((g) => g.key === 5)?.label).toBe("Quick passed · Exhaustive failed");
+    expect(ready.find((g) => g.key === 6)?.label).toBe("Quick passed · Exhaustive failed");
     expect(ready.find((g) => g.key === 30)?.label).toBe("Quick failed");
   });
 });
