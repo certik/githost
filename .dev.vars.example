@@ -1,0 +1,16 @@
+# Copy to `.dev.vars` for local `wrangler dev`. Never commit `.dev.vars`.
+# In production, set these via `wrangler secret put NAME`.
+
+GITHUB_APP_ID="123456"
+GITHUB_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
+GITHUB_WEBHOOK_SECRET="dev-webhook-secret-change-me"
+
+# User OAuth (the GitHub App can also do user OAuth — same App ID / different client secret).
+GITHUB_OAUTH_CLIENT_ID="Iv1.abcdef"
+GITHUB_OAUTH_CLIENT_SECRET="ghp_dev_only"
+
+# 32 random bytes, base64-encoded — used for session cookie HMAC.
+SESSION_SECRET="dGVzdC1zZXNzaW9uLXNlY3JldC1jaGFuZ2UtbWUtcGxlYXNlLi4uLi4="
+
+# 32 random bytes, base64-encoded — AES-GCM key for encrypting user OAuth tokens at rest.
+TOKEN_ENCRYPTION_KEY="dGVzdC10b2tlbi1lbmNyeXB0aW9uLWtleS1jaGFuZ2UtbWUuLi4="

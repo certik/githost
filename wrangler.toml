@@ -1,0 +1,65 @@
+name = "githost"
+main = "src/worker.ts"
+compatibility_date = "2025-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Frontend SPA served as static assets. Worker runs only when no static file matches
+# (and we explicitly call ASSETS.fetch for SPA fallback in our catch-all route).
+[assets]
+directory = "./web/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+# Mirror of GitHub state — regenerable by replaying webhooks / full resync.
+[[d1_databases]]
+binding = "MIRROR_DB"
+database_name = "githost-mirror"
+# Replace with the real id from `npx wrangler d1 create githost-mirror`.
+database_id = "00000000-0000-0000-0000-00000000aaaa"
+migrations_dir = "migrations/mirror"
+
+# Irreplaceable local data (AI reviews, local labels, saved views, audit, sessions).
+[[d1_databases]]
+binding = "APP_DB"
+database_name = "githost-app"
+# Replace with the real id from `npx wrangler d1 create githost-app`.
+database_id = "00000000-0000-0000-0000-00000000bbbb"
+migrations_dir = "migrations/app"
+
+# Cached diffs/patches and nightly DB exports.
+[[r2_buckets]]
+binding = "BLOBS"
+bucket_name = "githost-blobs"
+
+# Async job pipeline (webhook fan-out, AI reviews, full resync).
+[[queues.producers]]
+binding = "JOBS"
+queue = "githost-jobs"
+
+[[queues.consumers]]
+queue = "githost-jobs"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 5
+dead_letter_queue = "githost-jobs-dlq"
+
+# Cron triggers (UTC).
+#  - 03:00 daily: delta resync sweep to repair drift from missed webhooks.
+#  - 03:30 daily: export both D1 databases to R2 (retain N days, see scheduled.ts).
+[triggers]
+crons = ["0 3 * * *", "30 3 * * *"]
+
+# Secrets (set via `wrangler secret put NAME`):
+#   GITHUB_APP_ID
+#   GITHUB_APP_PRIVATE_KEY        # PEM, multi-line
+#   GITHUB_WEBHOOK_SECRET
+#   GITHUB_OAUTH_CLIENT_ID
+#   GITHUB_OAUTH_CLIENT_SECRET
+#   SESSION_SECRET                # 32-byte random for cookie signing
+#   TOKEN_ENCRYPTION_KEY          # 32-byte base64 for AES-GCM token encryption
+
+# Plain vars (non-secret config).
+[vars]
+UPSTREAM_OWNER = "REPLACE_ME"
+UPSTREAM_REPO  = "REPLACE_ME"
+BACKUP_RETENTION_DAYS = "30"

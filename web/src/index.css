@@ -1,0 +1,5 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* diff2html ships its own stylesheet; we import it from the component that uses it. */

@@ -1,0 +1,126 @@
+# githost
+
+Local "GitHub clone" that mirrors an upstream repo:
+- Receives GitHub App webhooks → mirrors PRs / issues / comments / labels into D1.
+- Manual + scheduled re-sync repairs drift.
+- Local-only AI reviews (you choose what to post upstream).
+- Custom views, local labels, saved filters — none of which spam upstream.
+- Create branches in the upstream repo from the UI.
+
+Single Cloudflare Worker with Static Assets serves both the React SPA (`web/`)
+and the API (`src/`).
+
+## Layout
+
+```
+src/                    # Worker source (TypeScript)
+  worker.ts             #   entry: fetch + queue + scheduled
+  routes/{webhook,api,auth}.ts
+  jobs/{consumer,sync-pr,full-resync,ai-review}.ts
+  db/{mirror,app}/{schema,index}.ts
+  lib/{env,verify-webhook,crypto,github-app}.ts
+  scheduled.ts          # cron: nightly resync + nightly D1→R2 backup
+migrations/
+  mirror/0001_init.sql  # githost-mirror DB (regenerable cache of GitHub state)
+  app/0001_init.sql     # githost-app    DB (irreplaceable local data)
+web/                    # React + Vite + Tailwind SPA, builds to web/dist
+```
+
+## One-time setup
+
+```bash
+# 1. install
+npm install
+
+# 2. create a GitHub App
+#    Settings → Developer settings → GitHub Apps → New GitHub App
+#    Permissions: contents (RW), pull_requests (RW), issues (RW), metadata (R)
+#    Subscribe to events: pull_request, pull_request_review,
+#                         pull_request_review_comment, issues, issue_comment, push
+#    Webhook URL:    https://<your-worker-domain>/webhook/github
+#    Webhook secret: <generate a random string — save it>
+#    Generate a private key (.pem) and save it.
+#    Install the app on your upstream repo (or your fork of it).
+
+# 3. create Cloudflare resources
+npx wrangler login
+npx wrangler d1 create githost-mirror      # copy database_id into wrangler.toml
+npx wrangler d1 create githost-app         # copy database_id into wrangler.toml
+npx wrangler r2 bucket create githost-blobs
+npx wrangler queues create githost-jobs
+npx wrangler queues create githost-jobs-dlq
+
+# 4. apply migrations (locally and to production)
+npm run db:apply:local
+npm run db:apply:remote
+
+# 5. secrets (prod)
+npx wrangler secret put GITHUB_APP_ID
+npx wrangler secret put GITHUB_APP_PRIVATE_KEY   # paste full PEM
+npx wrangler secret put GITHUB_WEBHOOK_SECRET
+npx wrangler secret put GITHUB_OAUTH_CLIENT_ID
+npx wrangler secret put GITHUB_OAUTH_CLIENT_SECRET
+npx wrangler secret put SESSION_SECRET           # 32 random bytes, base64
+npx wrangler secret put TOKEN_ENCRYPTION_KEY     # 32 random bytes, base64
+
+# 6. set non-secret vars (or edit [vars] in wrangler.toml directly)
+#    UPSTREAM_OWNER, UPSTREAM_REPO
+
+# 7. dev or deploy
+cp .dev.vars.example .dev.vars                    # then edit
+npm run dev                                       # Vite (5173) + wrangler dev (8787)
+npm run deploy                                    # build + wrangler deploy
+```
+
+## Migration workflow
+
+Forward-only, numbered SQL files. Never edit a migration after it's been applied to remote.
+
+```bash
+# 1. edit src/db/mirror/schema.ts (or app/schema.ts)
+# 2. generate a migration from the schema diff
+npm run db:generate:mirror
+# 3. inspect migrations/mirror/000N_*.sql, tweak if needed
+# 4. apply locally and run the app to sanity-check
+npm run db:apply:mirror:local
+# 5. apply to prod (after taking a Time Travel bookmark!)
+npx wrangler d1 time-travel info githost-mirror   # save the bookmark
+npm run db:apply:mirror:remote
+```
+
+## Backups & disaster recovery
+
+- **Built-in:** D1 Time Travel gives you 30 days of point-in-time recovery on paid plans (7 days on free).
+  ```bash
+  npx wrangler d1 time-travel info     githost-app
+  npx wrangler d1 time-travel restore  githost-app --timestamp 2026-05-12T22:00:00Z
+  ```
+- **Offsite:** nightly cron in `src/scheduled.ts` dumps both DBs as NDJSON to
+  `R2://githost-blobs/backups/{mirror,app}/<timestamp>.jsonl`, prunes older than
+  `BACKUP_RETENTION_DAYS` (default 30).
+- **Manual export:** `npm run db:export:mirror` / `npm run db:export:app` (SQL dump to `./backups/`).
+
+## Pre-prod-migration checklist
+
+1. `wrangler d1 time-travel info <db>` → save the bookmark.
+2. `wrangler d1 export <db> --remote --output backups/<db>-pre-NNNN.sql`.
+3. Apply the migration to a fresh local DB seeded from that dump.
+4. Run smoke tests.
+5. Apply to remote during low traffic.
+
+## Adding a new job type
+
+1. Extend the `JobMessage` union in `src/lib/env.ts`.
+2. Add a handler module under `src/jobs/`.
+3. Wire it into `dispatch()` in `src/jobs/consumer.ts`.
+4. Producers call `env.JOBS.send({ type: "...", ... })`.
+
+## Where to go from here
+
+- Wire `installation` events to a small `installations` table so multi-repo works.
+- Implement `syncIssue` (mirror of `syncPr`).
+- Replace the stub in `src/jobs/ai-review.ts` with your LLM of choice.
+- Add real session-cookie auth checks to `/api/*` (currently open).
+- Add a `saved_view` UI for custom PR filters.
+- Optional: stand up a small VM if you ever want real `git` operations
+  (push, merge, cherry-pick) — Workers cannot run git binaries.
