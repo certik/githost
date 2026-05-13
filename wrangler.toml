@@ -6,18 +6,20 @@ compatibility_flags = ["nodejs_compat"]
 # Frontend SPA served as static assets. Worker runs only when no static file matches
 # (and we explicitly call ASSETS.fetch for SPA fallback in our catch-all route).
 #
-# CRITICAL: `run_worker_first` is required for paths the Worker must own.
-# Without this, Cloudflare's Static Assets binding intercepts browser navigation
-# requests (anything with `Sec-Fetch-Mode: navigate`) and serves index.html
-# BEFORE the Worker runs — so /auth/login etc. would never reach our handlers.
-# fetch() / XHR API calls from the SPA happen to work without this flag because
-# they don't send those headers, but real link clicks (e.g. "Sign in with
-# GitHub") would otherwise hit the cached SPA fallback.
+# CRITICAL: `run_worker_first = true` is required because:
+#   1. We gate the SPA itself behind a login check in the catch-all route. The
+#      Worker must intercept document navigations before Static Assets serves
+#      index.html from edge cache.
+#   2. /api/*, /auth/*, /webhook/*, /healthz all need the Worker. Without this
+#      flag, Cloudflare's Static Assets binding serves SPA index.html for any
+#      browser navigation (Sec-Fetch-Mode: navigate) and the Worker never runs.
+# The Worker still proxies asset requests to ASSETS.fetch in its catch-all, so
+# static files are served — they just go through a thin Worker shim first.
 [assets]
 directory = "./web/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-run_worker_first = ["/api/*", "/auth/*", "/webhook/*", "/healthz"]
+run_worker_first = true
 
 # Mirror of GitHub state — regenerable by replaying webhooks / full resync.
 [[d1_databases]]
@@ -69,6 +71,10 @@ UPSTREAM_REPO  = "lfortran"
 # For multi-installation later, replace with a lookup table populated by the
 # `installation` / `installation_repositories` webhook events.
 GITHUB_INSTALLATION_ID = "131928789"
+# Comma-separated list of GitHub logins permitted to sign in. Anyone else is
+# rejected at the OAuth callback with an "access denied" page. Keeping this in
+# plain vars (not secrets) so we can audit the allowlist from `wrangler.toml`.
+ALLOWED_GITHUB_LOGINS = "certik"
 
 # ============================================================================
 # Preview environment — shared by all PR previews. Deployed to a separate Worker
@@ -83,7 +89,7 @@ name = "githost-preview"
 directory = "./web/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-run_worker_first = ["/api/*", "/auth/*", "/webhook/*", "/healthz"]
+run_worker_first = true
 
 [[env.preview.d1_databases]]
 binding = "MIRROR_DB"
@@ -105,6 +111,7 @@ id = "6052b8d7481841cb9200d9398b352eaa"
 UPSTREAM_OWNER = "lfortran"
 UPSTREAM_REPO  = "lfortran"
 GITHUB_INSTALLATION_ID = "131928789"
+ALLOWED_GITHUB_LOGINS = "certik"
 
 # Disable cron triggers on preview — don't contend with prod's nightly resync.
 # (Triggers do NOT inherit from the top-level config; we still need to be explicit
