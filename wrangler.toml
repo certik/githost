@@ -5,10 +5,19 @@ compatibility_flags = ["nodejs_compat"]
 
 # Frontend SPA served as static assets. Worker runs only when no static file matches
 # (and we explicitly call ASSETS.fetch for SPA fallback in our catch-all route).
+#
+# CRITICAL: `run_worker_first` is required for paths the Worker must own.
+# Without this, Cloudflare's Static Assets binding intercepts browser navigation
+# requests (anything with `Sec-Fetch-Mode: navigate`) and serves index.html
+# BEFORE the Worker runs — so /auth/login etc. would never reach our handlers.
+# fetch() / XHR API calls from the SPA happen to work without this flag because
+# they don't send those headers, but real link clicks (e.g. "Sign in with
+# GitHub") would otherwise hit the cached SPA fallback.
 [assets]
 directory = "./web/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
+run_worker_first = ["/api/*", "/auth/*", "/webhook/*", "/healthz"]
 
 # Mirror of GitHub state — regenerable by replaying webhooks / full resync.
 [[d1_databases]]
@@ -74,6 +83,7 @@ name = "githost-preview"
 directory = "./web/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
+run_worker_first = ["/api/*", "/auth/*", "/webhook/*", "/healthz"]
 
 [[env.preview.d1_databases]]
 binding = "MIRROR_DB"
