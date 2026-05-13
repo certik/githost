@@ -12,7 +12,7 @@ const SORT_MODE_KEY = "githost.sortMode";
 
 const MAX_BATCHES_KEY = "githost.maxBatches";
 const MAX_BATCHES_CHOICES = [5, 15, 50, 100, 200] as const;
-const MAX_BATCHES_DEFAULT = 15;
+const MAX_BATCHES_DEFAULT = 5;
 
 export default function App() {
   const { data: me } = useQuery({ queryKey: ["me"], queryFn: () => api.me(), staleTime: 60_000 });

@@ -36,7 +36,7 @@ import { syncLog } from "../lib/sync-log";
  */
 
 const ALARM_DELAY_MS = 500;        // gap between batches; let other requests through
-const DEFAULT_MAX_BATCHES = 15;    // sane default — covers normal drift in one click
+const DEFAULT_MAX_BATCHES = 5;     // sane default — covers normal webhook drift
 const HARD_MAX_BATCHES = 200;      // absolute ceiling regardless of caller request
 
 export class SyncChain extends DurableObject<Env> {

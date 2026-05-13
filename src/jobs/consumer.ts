@@ -73,7 +73,9 @@ async function handleWebhook(
     case "pull_request_review":
     case "pull_request_review_comment": {
       const num = p.pull_request?.number;
-      if (num) runJob({ type: "sync.pr", repoId, number: num }, env, ctx);
+      // Await inline: callers from webhook routes invoke handleWebhook via
+      // runJobAwait so the D1 upsert is committed before we 200 GitHub.
+      if (num) await runJobAwait({ type: "sync.pr", repoId, number: num }, env, ctx);
       break;
     }
     case "issue_comment":
@@ -81,8 +83,8 @@ async function handleWebhook(
       const num = p.issue?.number;
       if (!num) break;
       // GitHub conflates issue & PR comments; if `issue.pull_request` is set, treat as PR.
-      if (p.issue?.pull_request) runJob({ type: "sync.pr", repoId, number: num }, env, ctx);
-      else runJob({ type: "sync.issue", repoId, number: num }, env, ctx);
+      if (p.issue?.pull_request) await runJobAwait({ type: "sync.pr", repoId, number: num }, env, ctx);
+      else await runJobAwait({ type: "sync.issue", repoId, number: num }, env, ctx);
       break;
     }
     // CI events: GitHub Actions firing → status of one of our buckets changed.
@@ -91,6 +93,11 @@ async function handleWebhook(
     // we mirror). When pull_requests is empty (e.g. on a push to a branch
     // before any PR exists), we look up the PR by head_sha in our mirror DB
     // — covers the common case of "GH delivered check_run before pull_request".
+    //
+    // Fire-and-forget via runJob: these can fan out (a workflow_run touching
+    // several PRs at once), and the webhook routes also dispatch CI events
+    // via runJob — losing the occasional update is survivable, blowing
+    // GitHub's 10s webhook timeout is not.
     case "check_run":
     case "check_suite":
     case "workflow_run": {
