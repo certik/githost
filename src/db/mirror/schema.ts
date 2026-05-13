@@ -38,6 +38,13 @@ export const pr = sqliteTable("pr", {
   state: text("state").notNull(),                          // "open" | "closed"
   draft: integer("draft", { mode: "boolean" }).notNull().default(false),
   merged: integer("merged", { mode: "boolean" }).notNull().default(false),
+  // GitHub's `mergeable`: true | false | null. null means GH is still
+  // computing (common right after a push); we treat null as "unknown" and
+  // leave such PRs in the "ready to merge" bucket optimistically.
+  mergeable: integer("mergeable", { mode: "boolean" }),
+  // GitHub's `mergeable_state`: clean | dirty | unstable | behind | blocked
+  // | unknown | draft. Useful for richer UI tooltips later.
+  mergeableState: text("mergeable_state"),
   title: text("title").notNull(),
   body: text("body"),
   authorId: integer("author_id").references(() => user.id),

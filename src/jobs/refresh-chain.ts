@@ -60,22 +60,43 @@ export async function refreshPrsBatch(env: Env, page: number): Promise<BatchResu
   }
 
   // Look up the mirror rows for these PRs in one query so we can compare
-  // updated_at without N round-trips. Drizzle/D1 handles the parameterized IN.
+  // updated_at + check whether we still need to populate mergeable. Drizzle/D1
+  // handles the parameterized IN.
   const db = mirrorDb(env.MIRROR_DB);
   const ids = items.map((i) => i.id);
-  const known = await db.select({ id: M.pr.id, updatedAt: M.pr.updatedAt })
+  const known = await db.select({
+    id: M.pr.id,
+    updatedAt: M.pr.updatedAt,
+    state: M.pr.state,
+    merged: M.pr.merged,
+    mergeable: M.pr.mergeable,
+  })
     .from(M.pr)
     .where(inArray(M.pr.id, ids))
     .all();
-  const knownById = new Map(known.map((r) => [r.id, r.updatedAt]));
+  const knownById = new Map(known.map((r) => [r.id, r]));
 
-  // Decide which items need a re-fetch.
+  // Decide which items need a re-fetch. Reasons:
+  //  - new (not in mirror yet)
+  //  - GitHub updated_at > mirror updated_at (real upstream change)
+  //  - open + not-merged with mergeable IS NULL: backfill freshly-added
+  //    mergeable field. Once populated, the row hits the normal watermark
+  //    on subsequent passes.
   const stale: Array<{ number: number; id: number }> = [];
   for (const item of items) {
     const have = knownById.get(item.id);
     const itemUpdated = new Date(item.updated_at);
-    if (!have || have.getTime() < itemUpdated.getTime()) {
+    if (!have) {
       stale.push({ number: item.number, id: item.id });
+      continue;
+    }
+    if (have.updatedAt.getTime() < itemUpdated.getTime()) {
+      stale.push({ number: item.number, id: item.id });
+      continue;
+    }
+    if (have.state === "open" && !have.merged && have.mergeable === null) {
+      stale.push({ number: item.number, id: item.id });
+      continue;
     }
   }
 

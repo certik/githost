@@ -35,13 +35,15 @@ async function seedDefaultMappings(): Promise<void> {
 }
 
 /** Minimal PR payload syncPr expects from GET /repos/.../pulls/:n. */
-function mockPullPayload(opts: { number: number; id: number; headSha: string }) {
+function mockPullPayload(opts: { number: number; id: number; headSha: string; mergeable?: boolean | null; mergeable_state?: string }) {
   return {
     id: opts.id,
     number: opts.number,
     state: "open",
     draft: false,
     merged: false,
+    mergeable: opts.mergeable ?? null,
+    mergeable_state: opts.mergeable_state ?? "unknown",
     title: `Test PR ${opts.number}`,
     body: null,
     user: { id: 1001, login: "alice", avatar_url: null, html_url: null, type: "User" },
@@ -241,5 +243,59 @@ describe("syncPr → pr_test_run via check runs", () => {
     const pr = await getPr(400);
     expect(pr?.quickTest).toBeNull();
     expect(pr?.exhaustiveTest).toBeNull();
+  });
+
+  it("persists mergeable + mergeable_state from the PR detail response", async () => {
+    await seedDefaultMappings();
+    const headSha = "sha-500";
+
+    mswServer.use(
+      http.post("https://api.github.com/app/installations/:id/access_tokens", () => {
+        return HttpResponse.json({ token: "v1.test", expires_at: new Date(Date.now() + 3_600_000).toISOString() });
+      }),
+      http.get(`https://api.github.com/repos/${OWNER}/${REPO}/pulls/500`, () => {
+        return HttpResponse.json(mockPullPayload({
+          number: 500, id: 5000, headSha,
+          mergeable: false, mergeable_state: "dirty",
+        }));
+      }),
+      http.get(`https://api.github.com/repos/${OWNER}/${REPO}/commits/${headSha}/check-runs`, () => {
+        return HttpResponse.json({ total_count: 0, check_runs: [] });
+      }),
+    );
+    await syncPr(env, 1, 500);
+
+    const row = await env.MIRROR_DB.prepare(
+      "SELECT mergeable, mergeable_state FROM pr WHERE number = 500"
+    ).first<{ mergeable: number | null; mergeable_state: string | null }>();
+    expect(row?.mergeable).toBe(0);
+    expect(row?.mergeable_state).toBe("dirty");
+  });
+
+  it("persists mergeable=null when GitHub is still computing", async () => {
+    await seedDefaultMappings();
+    const headSha = "sha-501";
+
+    mswServer.use(
+      http.post("https://api.github.com/app/installations/:id/access_tokens", () => {
+        return HttpResponse.json({ token: "v1.test", expires_at: new Date(Date.now() + 3_600_000).toISOString() });
+      }),
+      http.get(`https://api.github.com/repos/${OWNER}/${REPO}/pulls/501`, () => {
+        return HttpResponse.json(mockPullPayload({
+          number: 501, id: 5010, headSha,
+          mergeable: null, mergeable_state: "unknown",
+        }));
+      }),
+      http.get(`https://api.github.com/repos/${OWNER}/${REPO}/commits/${headSha}/check-runs`, () => {
+        return HttpResponse.json({ total_count: 0, check_runs: [] });
+      }),
+    );
+    await syncPr(env, 1, 501);
+
+    const row = await env.MIRROR_DB.prepare(
+      "SELECT mergeable, mergeable_state FROM pr WHERE number = 501"
+    ).first<{ mergeable: number | null; mergeable_state: string | null }>();
+    expect(row?.mergeable).toBeNull();
+    expect(row?.mergeable_state).toBe("unknown");
   });
 });

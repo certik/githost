@@ -10,6 +10,10 @@ import Logs from "./Logs";
 type SortMode = "review-priority" | "newest";
 const SORT_MODE_KEY = "githost.sortMode";
 
+const MAX_BATCHES_KEY = "githost.maxBatches";
+const MAX_BATCHES_CHOICES = [5, 15, 50, 100, 200] as const;
+const MAX_BATCHES_DEFAULT = 15;
+
 export default function App() {
   const { data: me } = useQuery({ queryKey: ["me"], queryFn: () => api.me(), staleTime: 60_000 });
   const qc = useQueryClient();
@@ -72,13 +76,24 @@ function PrList({ signedIn }: { signedIn: boolean }) {
     try { localStorage.setItem(SORT_MODE_KEY, sortMode); } catch { /* ignore */ }
   }, [sortMode]);
 
+  const [maxBatches, setMaxBatches] = useState<number>(() => {
+    try {
+      const v = parseInt(localStorage.getItem(MAX_BATCHES_KEY) ?? "", 10);
+      if (MAX_BATCHES_CHOICES.includes(v as typeof MAX_BATCHES_CHOICES[number])) return v;
+    } catch { /* fall through */ }
+    return MAX_BATCHES_DEFAULT;
+  });
+  useEffect(() => {
+    try { localStorage.setItem(MAX_BATCHES_KEY, String(maxBatches)); } catch { /* ignore */ }
+  }, [maxBatches]);
+
   const qc = useQueryClient();
   const { data, isLoading, error } = useQuery({
     queryKey: ["prs", state],
     queryFn: () => api.prs(state === "all" ? undefined : state),
   });
   const refresh = useMutation({
-    mutationFn: () => api.refresh("prs"),
+    mutationFn: () => api.refresh("prs", { maxBatches }),
   });
 
   // Poll the DO status while the chain is running, then 5s of "settling"
@@ -146,6 +161,17 @@ function PrList({ signedIn }: { signedIn: boolean }) {
             <option value="closed">Closed</option>
             <option value="all">All</option>
           </select>
+          <select
+            className="border rounded px-2 py-1 text-sm"
+            value={maxBatches}
+            onChange={(e) => setMaxBatches(parseInt(e.target.value, 10))}
+            title="Max batches per refresh click (20 PRs per batch). Higher = catches up more drift but takes longer."
+            disabled={refresh.isPending || syncStatus.data?.status === "running"}
+          >
+            {MAX_BATCHES_CHOICES.map((n) => (
+              <option key={n} value={n}>{n} batches</option>
+            ))}
+          </select>
           <button
             className="border rounded px-3 py-1 text-sm bg-white hover:bg-zinc-100 disabled:opacity-50"
             onClick={() => refresh.mutate()}
@@ -181,9 +207,10 @@ function PrList({ signedIn }: { signedIn: boolean }) {
 /** Header row used at the top of every PR list view, shared for column alignment. */
 function PrListHeader() {
   return (
-    <li className="px-4 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 grid grid-cols-[1fr_8rem_4.5rem_4.5rem] gap-3 items-center">
+    <li className="px-4 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 grid grid-cols-[1fr_8rem_3rem_4.5rem_4.5rem] gap-3 items-center">
       <span>Pull request</span>
       <span>State</span>
+      <span className="text-center" title="Mergeable status from GitHub">Merge</span>
       <span className="text-center" title="Quick tests">Quick</span>
       <span className="text-center" title="Exhaustive tests">Exhaustive</span>
     </li>
@@ -192,15 +219,58 @@ function PrListHeader() {
 
 function PrRow({ p }: { p: PrSummary }) {
   return (
-    <li className="px-4 py-3 hover:bg-zinc-50 grid grid-cols-[1fr_8rem_4.5rem_4.5rem] gap-3 items-center">
+    <li className="px-4 py-3 hover:bg-zinc-50 grid grid-cols-[1fr_8rem_3rem_4.5rem_4.5rem] gap-3 items-center">
       <a href={p.htmlUrl} target="_blank" rel="noreferrer" className="flex items-baseline gap-2 min-w-0">
         <span className="text-zinc-900 font-medium truncate hover:underline">{p.title}</span>
         <span className="text-zinc-500 text-xs whitespace-nowrap">#{p.number} by {p.authorLogin ?? "?"}</span>
       </a>
       <span><PrStateBadge pr={p} /></span>
+      <span className="flex justify-center"><MergeableIndicator pr={p} /></span>
       <span className="flex justify-center"><TestStatusDot run={p.quickTest} label="Quick" /></span>
       <span className="flex justify-center"><TestStatusDot run={p.exhaustiveTest} label="Exhaustive" /></span>
     </li>
+  );
+}
+
+/**
+ * Renders a 16×16 icon showing whether a PR is mergeable per GitHub:
+ *   - true  → green check (clean merge possible)
+ *   - false → red X (merge conflict, needs rebase)
+ *   - null  → gray "?" (GH still computing, or PR is closed/merged)
+ *
+ * For merged/closed PRs we suppress the indicator entirely since merging
+ * is no longer relevant.
+ */
+function MergeableIndicator({ pr }: { pr: PrSummary }) {
+  if (pr.state === "closed" || pr.merged) {
+    return <span className="text-zinc-300" title="Not relevant (PR is closed)">—</span>;
+  }
+  if (pr.mergeable === true) {
+    return (
+      <svg viewBox="0 0 16 16" className="w-4 h-4 text-green-600"
+        role="img" aria-label="Mergeable">
+        <title>{`Mergeable (${pr.mergeableState ?? "clean"})`}</title>
+        <path d="M3 8.5L6.5 12L13 4.5" stroke="currentColor" strokeWidth="2.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+  if (pr.mergeable === false) {
+    return (
+      <svg viewBox="0 0 16 16" className="w-4 h-4 text-red-600"
+        role="img" aria-label="Merge conflict">
+        <title>{`Merge conflict (${pr.mergeableState ?? "dirty"})`}</title>
+        <path d="M4 4L12 12M12 4L4 12" stroke="currentColor" strokeWidth="2.5" fill="none" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  // mergeable === null: GH still computing, OR we haven't synced this PR
+  // since the column was added. Will resolve on the next webhook / refresh.
+  return (
+    <svg viewBox="0 0 16 16" className="w-4 h-4 text-zinc-400"
+      role="img" aria-label="Mergeable status unknown">
+      <title>Mergeable status unknown — GitHub is computing or sync pending</title>
+      <text x="8" y="13" textAnchor="middle" fontSize="14" fill="currentColor" fontWeight="bold" fontFamily="system-ui">?</text>
+    </svg>
   );
 }
 
@@ -247,18 +317,20 @@ function PrListReviewPriority({ items, signedIn }: { items: PrSummary[]; signedI
           ? <div className="text-zinc-500 text-sm px-4 py-3 border rounded bg-white">Nothing here — all open PRs are drafts.</div>
           : (
             <div className="space-y-3">
-              {ready.map((g) => (
-                <div
-                  key={g.key}
-                  className={
-                    g.highlight
-                      ? "rounded-md border-2 border-green-500 bg-white shadow-sm"
-                      : "rounded border bg-white"
-                  }
-                >
-                  <div className={`px-4 py-1.5 text-xs font-medium uppercase tracking-wide ${
-                    g.highlight ? "text-green-700" : "text-zinc-500"
-                  }`}>
+              {ready.map((g) => {
+                const boxClass = g.highlight
+                  ? "rounded-md border-2 border-green-500 bg-white shadow-sm"
+                  : g.warn
+                    ? "rounded-md border-2 border-amber-400 bg-white shadow-sm"
+                    : "rounded border bg-white";
+                const headerClass = g.highlight
+                  ? "text-green-700"
+                  : g.warn
+                    ? "text-amber-700"
+                    : "text-zinc-500";
+                return (
+                <div key={g.key} className={boxClass}>
+                  <div className={`px-4 py-1.5 text-xs font-medium uppercase tracking-wide ${headerClass}`}>
                     {g.label}
                     <span className="text-zinc-400 normal-case font-normal ml-2">
                       ({g.items.length})
@@ -269,7 +341,8 @@ function PrListReviewPriority({ items, signedIn }: { items: PrSummary[]; signedI
                     {g.items.map((p) => <PrRow key={p.id} p={p} />)}
                   </ul>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
       </section>

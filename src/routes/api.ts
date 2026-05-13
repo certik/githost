@@ -53,6 +53,8 @@ apiRoutes.get("/prs", async (c) => {
     state: M.pr.state,
     draft: M.pr.draft,
     merged: M.pr.merged,
+    mergeable: M.pr.mergeable,
+    mergeableState: M.pr.mergeableState,
     headRef: M.pr.headRef,
     baseRef: M.pr.baseRef,
     createdAt: M.pr.createdAt,
@@ -236,7 +238,7 @@ apiRoutes.get("/prs/:number/diff", async (c) => {
 // Only `resource: "prs"` uses the DO chain; "issues" / "comments" fall back
 // to the legacy fire-and-forget runJob path (to be migrated next).
 apiRoutes.post("/refresh", requireSession, async (c) => {
-  type Body = { resource?: "prs" | "issues" | "comments" };
+  type Body = { resource?: "prs" | "issues" | "comments"; maxBatches?: number };
   const body: Body = await c.req.json<Body>().catch(() => ({} as Body));
   const resource = body.resource ?? "prs";
 
@@ -245,13 +247,19 @@ apiRoutes.post("/refresh", requireSession, async (c) => {
     return c.json({ ok: true, queued: resource });
   }
 
-  await syncLog(c.env, "info", "sync.refresh.start", `manual refresh by ${currentUser(c).login}`, {
-    actor: currentUser(c).login,
-  });
+  await syncLog(c.env, "info", "sync.refresh.start",
+    `manual refresh by ${currentUser(c).login} (maxBatches=${body.maxBatches ?? "default"})`, {
+      actor: currentUser(c).login,
+      maxBatches: body.maxBatches,
+    });
 
   const stub = getSyncChainStub(c.env);
-  const r = await stub.fetch("https://do/start", { method: "POST" });
-  const data = await r.json<{ ok: boolean; alreadyRunning?: boolean; scheduled?: boolean; page?: number; batches?: number }>();
+  const r = await stub.fetch("https://do/start", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ maxBatches: body.maxBatches }),
+  });
+  const data = await r.json<{ ok: boolean; alreadyRunning?: boolean; scheduled?: boolean; page?: number; batches?: number; maxBatches?: number }>();
   return c.json(data);
 });
 

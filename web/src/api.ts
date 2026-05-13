@@ -16,6 +16,10 @@ export interface PrSummary {
   state: "open" | "closed";
   draft: boolean;
   merged: boolean;
+  // null = GitHub still computing (recent push), true/false = known.
+  mergeable: boolean | null;
+  // "clean" | "dirty" | "unstable" | "behind" | "blocked" | "unknown" | "draft"
+  mergeableState: string | null;
   headRef: string | null;
   baseRef: string | null;
   createdAt: number;
@@ -61,11 +65,12 @@ async function j<T>(path: string, init?: RequestInit): Promise<T> {
 
 export interface RefreshResponse {
   ok: true;
-  scheduled?: boolean;       // new chain kicked off
-  alreadyRunning?: boolean;  // a chain is already in progress
-  page?: number;             // current page (when alreadyRunning)
-  batches?: number;          // batches completed so far (when alreadyRunning)
-  queued?: string;           // legacy issues/comments path
+  scheduled?: boolean;
+  alreadyRunning?: boolean;
+  page?: number;
+  batches?: number;
+  maxBatches?: number;
+  queued?: string;
 }
 
 export interface SyncStatus {
@@ -73,6 +78,7 @@ export interface SyncStatus {
   page: number | null;
   batches: number;
   processed: number;
+  maxBatches: number;
   startedAt: number | null;
   finishedAt: number | null;
   lastError: string | null;
@@ -92,8 +98,12 @@ export const api = {
   prs: (state?: string) => j<{ items: PrSummary[] }>(`/api/prs${state ? `?state=${state}` : ""}`),
   pr: (n: number) => j<PrDetailResponse>(`/api/prs/${n}`),
   diff: (n: number) => fetch(`/api/prs/${n}/diff`, { credentials: "include" }).then(r => r.text()),
-  refresh: (resource: "prs" | "issues" | "comments" = "prs") =>
-    j<RefreshResponse>(`/api/refresh`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ resource }) }),
+  refresh: (resource: "prs" | "issues" | "comments" = "prs", opts?: { maxBatches?: number }) =>
+    j<RefreshResponse>(`/api/refresh`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ resource, ...(opts?.maxBatches ? { maxBatches: opts.maxBatches } : {}) }),
+    }),
   refreshStatus: () => j<SyncStatus>(`/api/refresh/status`),
   logs: (opts?: { limit?: number; level?: string; event?: string }) => {
     const q = new URLSearchParams();
