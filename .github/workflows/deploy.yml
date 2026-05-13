@@ -20,7 +20,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "npm"
 
       - run: npm ci
@@ -30,24 +30,27 @@ jobs:
 
       # Capture a Time Travel bookmark BEFORE applying migrations. If anything
       # goes wrong we can `wrangler d1 time-travel restore --bookmark <id>`.
-      # Logged to the run summary so it's discoverable later.
+      # Logged to the run summary so it's discoverable later. Treated as
+      # informational: if bookmark capture fails for any reason we still proceed
+      # (the migration itself is the gate, and Time Travel keeps a continuous
+      # log on the Cloudflare side regardless of whether we recorded the id).
       - name: Snapshot Time Travel bookmarks (prod)
+        continue-on-error: true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          set -euo pipefail
           {
             echo "## Pre-migration Time Travel bookmarks"
             echo
             echo '### githost-mirror'
             echo '```'
-            npx wrangler d1 time-travel info githost-mirror 2>&1 | tail -n +3
+            npx wrangler d1 time-travel info githost-mirror 2>&1 || true
             echo '```'
             echo
             echo '### githost-app'
             echo '```'
-            npx wrangler d1 time-travel info githost-app 2>&1 | tail -n +3
+            npx wrangler d1 time-travel info githost-app 2>&1 || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
