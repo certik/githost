@@ -105,6 +105,11 @@ export async function syncPr(env: Env, _repoId: number, number: number): Promise
  *   - upsert pr_test_run row, OR delete the existing row if no checks match
  *     (keeps the UI in sync with upstream — no stale colors)
  *
+ * Matching is against the bare check_run.name from GitHub's check-runs API.
+ * lfortran's job names are unique across workflows, so we don't need to also
+ * resolve the workflow name — a few exact / glob patterns plus a "*" catchall
+ * for everything else are enough. Patterns live in check_kind_map.
+ *
  * Silent on a 404 from GitHub (the SHA may have just been force-pushed away).
  */
 async function syncPrChecks(env: Env, prId: number, headSha: string): Promise<void> {
@@ -135,7 +140,6 @@ async function syncPrChecks(env: Env, prId: number, headSha: string): Promise<vo
   for (const kind of ["quick", "exhaustive"] as const) {
     const status = aggregateChecks(buckets[kind]);
     if (status === null) {
-      // No matching checks — drop any stale row so the UI shows an empty ring.
       await adb.delete(A.prTestRun)
         .where(and(eq(A.prTestRun.prId, prId), eq(A.prTestRun.kind, kind)))
         .run();
