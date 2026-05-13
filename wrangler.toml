@@ -40,19 +40,34 @@ migrations_dir = "migrations/app"
 binding = "DIFF_CACHE"
 id = "babcea2ca8374157bc1405e26c3fb25a"
 
+# Durable Object used by /api/refresh to drive the resync chain via alarms.
+# Why a DO and not Worker→Worker self-fetch: Cloudflare caps recursive Worker
+# call depth at ~10 nested service-binding calls, so self-fetch chaining
+# topped out at ~200 PRs per refresh click. DO alarm() invocations are
+# independent (no parent, no stack), so the chain runs as long as it needs.
+[[durable_objects.bindings]]
+name = "SYNC_CHAIN"
+class_name = "SyncChain"
+
+# SQLite-backed DOs (vs the original KV-backed) are free on Workers Free.
+# `new_sqlite_classes` opts a NEW class into the SQLite backend; classes
+# created with `new_classes` use the older KV backend and require Paid.
+[[migrations]]
+tag = "v1-sync-chain"
+new_sqlite_classes = ["SyncChain"]
+
 # NOTE: Workers Free plan does not include Queues. We use `ctx.waitUntil()` for
 # async work instead — the webhook handler returns 200 immediately and continues
 # processing in the background. To switch to Queues later, restore the
 # `[[queues.producers]]` / `[[queues.consumers]]` stanzas, set `JOBS` in Env,
 # and replace `runJob(msg, env, ctx)` calls with `env.JOBS.send(msg)`.
 
-# Cron triggers (UTC).
-#  - 03:00 daily: delta resync sweep to repair drift from missed webhooks.
-# Backups: performed by GitHub Actions (wrangler d1 export → GH artifact),
-# not by the Worker. This avoids needing R2 (and any payment method) on the
-# Workers Free plan.
+# Cron triggers — DISABLED. We rely on GitHub webhooks for real-time updates
+# and the server-side resync chain (POST /api/refresh → chained
+# /api/internal/sync-batch calls) for on-demand catch-up. No cron means no
+# silent background sync hiding webhook delivery bugs.
 [triggers]
-crons = ["0 3 * * *"]
+crons = []
 
 # Secrets (set via `wrangler secret put NAME`):
 #   GITHUB_APP_ID

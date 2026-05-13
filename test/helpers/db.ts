@@ -34,6 +34,7 @@ const APP_ORDER = [
   // future tables (no FK) — order within group doesn't matter, but keep them here:
   "pr_test_run",
   "check_kind_map",
+  "sync_log",
 ];
 
 export async function resetDbs(): Promise<void> {

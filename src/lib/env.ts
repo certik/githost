@@ -29,6 +29,11 @@ export interface Env {
   SESSION_SECRET: string;
   TOKEN_ENCRYPTION_KEY: string;
 
+  // Durable Object namespace for the SyncChain singleton. Used by /api/refresh
+  // to kick off the alarm-driven resync chain. See
+  // src/durable-objects/sync-chain.ts for why a DO (vs Worker self-fetch).
+  SYNC_CHAIN: DurableObjectNamespace;
+
   // Local-dev only — when set to "true", GET /auth/dev-login creates a session
   // and signs you in as the user named in the `login` query param (default
   // "dev"). Should ONLY be set in .dev.vars (which is git-ignored) — never in

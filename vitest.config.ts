@@ -77,6 +77,11 @@ export default defineConfig(async () => {
             // it enabled pass an env override into worker.fetch directly.
             DEV_LOGIN_ENABLED: "",
           },
+          // SyncChain DO binding for refresh tests. Miniflare auto-discovers
+          // the class via the script entry, so we just declare the namespace.
+          durableObjects: {
+            SYNC_CHAIN: { className: "SyncChain" },
+          },
         },
       }),
     ],

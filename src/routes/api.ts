@@ -7,6 +7,8 @@ import { appDb } from "../db/app";
 import * as A from "../db/app/schema";
 import { gh } from "../lib/github-app";
 import { runJob } from "../jobs/consumer";
+import { getSyncChainStub } from "../durable-objects/sync-chain";
+import { syncLog } from "../lib/sync-log";
 import { currentUser, loadSession, requireSession } from "../lib/auth";
 import { appUpdate } from "../lib/audit";
 
@@ -222,14 +224,85 @@ apiRoutes.get("/prs/:number/diff", async (c) => {
   return new Response(text, { headers: { "content-type": "text/plain; charset=utf-8" } });
 });
 
-// POST /api/refresh  { resource: "prs" | "issues" | "comments" }  → enqueue full resync
+// POST /api/refresh  { resource?: "prs" | "issues" | "comments" }
+//
+// Kicks off the resync chain via the SyncChain Durable Object. The DO runs
+// one batch at a time via setAlarm(), so the chain can process arbitrarily
+// many PRs without hitting CF's Worker→Worker call-depth cap (~10).
+//
+// Returns immediately. The actual sync runs in the background as the DO
+// fires its alarms. Progress is visible at /api/logs (and in the /logs UI).
+//
+// Only `resource: "prs"` uses the DO chain; "issues" / "comments" fall back
+// to the legacy fire-and-forget runJob path (to be migrated next).
 apiRoutes.post("/refresh", requireSession, async (c) => {
   type Body = { resource?: "prs" | "issues" | "comments" };
   const body: Body = await c.req.json<Body>().catch(() => ({} as Body));
   const resource = body.resource ?? "prs";
-  runJob({ type: "sync.full", resource }, c.env, c.executionCtx);
-  return c.json({ ok: true, queued: resource });
+
+  if (resource !== "prs") {
+    runJob({ type: "sync.full", resource }, c.env, c.executionCtx);
+    return c.json({ ok: true, queued: resource });
+  }
+
+  await syncLog(c.env, "info", "sync.refresh.start", `manual refresh by ${currentUser(c).login}`, {
+    actor: currentUser(c).login,
+  });
+
+  const stub = getSyncChainStub(c.env);
+  const r = await stub.fetch("https://do/start", { method: "POST" });
+  const data = await r.json<{ ok: boolean; alreadyRunning?: boolean; scheduled?: boolean; page?: number; batches?: number }>();
+  return c.json(data);
 });
+
+// GET /api/refresh/status — current state of the resync chain DO. Lets the
+// UI poll progress while the chain runs.
+apiRoutes.get("/refresh/status", async (c) => {
+  const stub = getSyncChainStub(c.env);
+  const r = await stub.fetch("https://do/status");
+  return new Response(r.body, { status: r.status, headers: { "content-type": "application/json" } });
+});
+
+// POST /api/refresh/reset — admin escape hatch to clear stuck DO state.
+apiRoutes.post("/refresh/reset", async (c) => {
+  const stub = getSyncChainStub(c.env);
+  const r = await stub.fetch("https://do/reset", { method: "POST" });
+  return new Response(r.body, { status: r.status, headers: { "content-type": "application/json" } });
+});
+
+// GET /api/logs?limit=200&level=error&event=sync.pr.error
+// Returns recent sync_log rows, newest first. Allowlist-gated by requireSession.
+apiRoutes.get("/logs", async (c) => {
+  const limit = Math.min(parseInt(c.req.query("limit") ?? "200", 10) || 200, 1000);
+  const level = c.req.query("level");
+  const event = c.req.query("event");
+
+  const db = appDb(c.env.APP_DB);
+  const conds: ReturnType<typeof eq>[] = [];
+  if (level) conds.push(eq(A.syncLog.level, level));
+  if (event) conds.push(eq(A.syncLog.event, event));
+
+  const rows = await db.select().from(A.syncLog)
+    .where(conds.length ? and(...conds) : sql`1=1`)
+    .orderBy(desc(A.syncLog.ts))
+    .limit(limit)
+    .all();
+
+  return c.json({
+    items: rows.map((r) => ({
+      id: r.id,
+      ts: r.ts.getTime(),
+      level: r.level,
+      event: r.event,
+      message: r.message,
+      context: r.context ? safeParseJson(r.context) : null,
+    })),
+  });
+});
+
+function safeParseJson(s: string): unknown {
+  try { return JSON.parse(s); } catch { return s; }
+}
 
 // POST /api/branches  { name: "feature/x", from: "main" | "<sha>" }
 apiRoutes.post("/branches", requireSession, async (c) => {

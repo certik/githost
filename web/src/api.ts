@@ -59,12 +59,49 @@ async function j<T>(path: string, init?: RequestInit): Promise<T> {
   return r.json() as Promise<T>;
 }
 
+export interface RefreshResponse {
+  ok: true;
+  scheduled?: boolean;       // new chain kicked off
+  alreadyRunning?: boolean;  // a chain is already in progress
+  page?: number;             // current page (when alreadyRunning)
+  batches?: number;          // batches completed so far (when alreadyRunning)
+  queued?: string;           // legacy issues/comments path
+}
+
+export interface SyncStatus {
+  status: "idle" | "running" | "stopped";
+  page: number | null;
+  batches: number;
+  processed: number;
+  startedAt: number | null;
+  finishedAt: number | null;
+  lastError: string | null;
+}
+
+export interface SyncLogEntry {
+  id: number;
+  ts: number;
+  level: "info" | "warn" | "error";
+  event: string;
+  message: string;
+  context: unknown;
+}
+
 export const api = {
   me: () => j<Me>(`/api/me`),
   prs: (state?: string) => j<{ items: PrSummary[] }>(`/api/prs${state ? `?state=${state}` : ""}`),
   pr: (n: number) => j<PrDetailResponse>(`/api/prs/${n}`),
   diff: (n: number) => fetch(`/api/prs/${n}/diff`, { credentials: "include" }).then(r => r.text()),
   refresh: (resource: "prs" | "issues" | "comments" = "prs") =>
-    j<{ ok: true }>(`/api/refresh`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ resource }) }),
+    j<RefreshResponse>(`/api/refresh`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ resource }) }),
+  refreshStatus: () => j<SyncStatus>(`/api/refresh/status`),
+  logs: (opts?: { limit?: number; level?: string; event?: string }) => {
+    const q = new URLSearchParams();
+    if (opts?.limit) q.set("limit", String(opts.limit));
+    if (opts?.level) q.set("level", opts.level);
+    if (opts?.event) q.set("event", opts.event);
+    const qs = q.toString();
+    return j<{ items: SyncLogEntry[] }>(`/api/logs${qs ? `?${qs}` : ""}`);
+  },
   logout: () => fetch(`/auth/logout`, { method: "POST", credentials: "include" }),
 };

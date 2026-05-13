@@ -5,6 +5,7 @@ import { html as diffHtml, parse as diffParse } from "diff2html";
 import "diff2html/bundles/css/diff2html.min.css";
 import { api, ApiError, type PrSummary, type TestRun, type TestStatus } from "./api";
 import { groupForReviewPriority } from "./lib/review-priority";
+import Logs from "./Logs";
 
 type SortMode = "review-priority" | "newest";
 const SORT_MODE_KEY = "githost.sortMode";
@@ -26,6 +27,7 @@ export default function App() {
         <Link to="/" className="font-semibold text-zinc-900">githost</Link>
         <nav className="text-sm text-zinc-600 flex gap-4 flex-1">
           <Link to="/" className="hover:text-zinc-900">PRs</Link>
+          <Link to="/logs" className="hover:text-zinc-900">Sync log</Link>
         </nav>
         {me?.user ? (
           <div className="flex items-center gap-3 text-sm">
@@ -46,6 +48,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<PrList signedIn={!!me?.user} />} />
           <Route path="/pr/:number" element={<PrDetail />} />
+          <Route path="/logs" element={<Logs />} />
           <Route path="*" element={<div className="text-zinc-500">Not found.</div>} />
         </Routes>
       </main>
@@ -76,14 +79,53 @@ function PrList({ signedIn }: { signedIn: boolean }) {
   });
   const refresh = useMutation({
     mutationFn: () => api.refresh("prs"),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["prs"] }),
   });
+
+  // Poll the DO status while the chain is running, then 5s of "settling"
+  // after it finishes so the PR list query refetches and the user sees the
+  // newly-synced state. The DO returns { status: "idle" } when done.
+  const refreshTriggered = refresh.isPending || refresh.isSuccess;
+  const syncStatus = useQuery({
+    queryKey: ["refresh-status"],
+    queryFn: () => api.refreshStatus(),
+    enabled: refreshTriggered,
+    refetchInterval: (q) => q.state.data?.status === "running" ? 1500 : false,
+  });
+
+  // When the chain transitions to idle, invalidate the PR query so the new
+  // data shows up.
+  useEffect(() => {
+    if (syncStatus.data?.status === "idle" && refreshTriggered) {
+      qc.invalidateQueries({ queryKey: ["prs"] });
+    }
+  }, [syncStatus.data?.status, refreshTriggered, qc]);
 
   const refreshError = refresh.error instanceof ApiError && refresh.error.status === 401
     ? "Sign in to refresh from GitHub."
     : refresh.error
       ? (refresh.error as Error).message
       : null;
+
+  // Build a status banner from the DO status. While running: show progress.
+  // When idle, show the last completion if recent.
+  const refreshBanner = (() => {
+    if (!refreshTriggered) return null;
+    const s = syncStatus.data;
+    if (!s) {
+      // mutation succeeded but first status fetch hasn't returned yet
+      return refresh.data?.alreadyRunning ? "A sync is already running." : "Sync starting…";
+    }
+    if (s.status === "running") {
+      return `Syncing… page ${s.page}, ${s.batches} batches, ${s.processed} PRs synced.`;
+    }
+    if (s.status === "stopped" && s.lastError) {
+      return `Sync stopped: ${s.lastError}`;
+    }
+    if (s.status === "idle" && s.finishedAt) {
+      return `Sync complete: ${s.batches} batches, ${s.processed} PRs synced.`;
+    }
+    return null;
+  })();
 
   return (
     <div className="max-w-5xl mx-auto">
@@ -109,11 +151,23 @@ function PrList({ signedIn }: { signedIn: boolean }) {
             onClick={() => refresh.mutate()}
             disabled={refresh.isPending || !signedIn}
             title={signedIn ? undefined : "Sign in to refresh from GitHub"}
-          >{refresh.isPending ? "Queuing…" : "Manual refresh"}</button>
+          >{refresh.isPending ? "Refreshing…" : "Manual refresh"}</button>
         </div>
       </div>
 
       {refreshError && <div className="mb-3 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">{refreshError}</div>}
+      {refreshBanner && !refreshError && (
+        <div className={`mb-3 text-sm rounded px-3 py-2 flex items-center justify-between border ${
+          syncStatus.data?.status === "running"
+            ? "text-blue-800 bg-blue-50 border-blue-200"
+            : syncStatus.data?.status === "stopped"
+              ? "text-red-800 bg-red-50 border-red-200"
+              : "text-emerald-800 bg-emerald-50 border-emerald-200"
+        }`}>
+          <span>{refreshBanner}</span>
+          <Link to="/logs" className="text-xs underline opacity-75 hover:opacity-100">view sync log</Link>
+        </div>
+      )}
       {isLoading && <div className="text-zinc-500">Loading…</div>}
       {error && <div className="text-red-600 text-sm">{String((error as Error).message)}</div>}
 

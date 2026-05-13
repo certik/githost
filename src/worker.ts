@@ -6,6 +6,10 @@ import { authRoutes } from "./routes/auth";
 import { handleScheduled } from "./scheduled";
 import { loadSession } from "./lib/auth";
 
+// DO class export — required for the runtime to instantiate the binding
+// declared in wrangler.toml.
+export { SyncChain } from "./durable-objects/sync-chain";
+
 const app = new Hono<{ Bindings: Env }>();
 
 app.get("/healthz", (c) => c.json({ ok: true, ts: new Date().toISOString() }));
