@@ -238,7 +238,7 @@ apiRoutes.get("/prs/:number/diff", async (c) => {
 // Only `resource: "prs"` uses the DO chain; "issues" / "comments" fall back
 // to the legacy fire-and-forget runJob path (to be migrated next).
 apiRoutes.post("/refresh", requireSession, async (c) => {
-  type Body = { resource?: "prs" | "issues" | "comments"; maxBatches?: number };
+  type Body = { resource?: "prs" | "issues" | "comments"; maxBatches?: number; forceCount?: number };
   const body: Body = await c.req.json<Body>().catch(() => ({} as Body));
   const resource = body.resource ?? "prs";
 
@@ -248,18 +248,22 @@ apiRoutes.post("/refresh", requireSession, async (c) => {
   }
 
   await syncLog(c.env, "info", "sync.refresh.start",
-    `manual refresh by ${currentUser(c).login} (maxBatches=${body.maxBatches ?? "default"})`, {
+    `manual refresh by ${currentUser(c).login} (maxBatches=${body.maxBatches ?? "default"}, forceCount=${body.forceCount ?? "default"})`, {
       actor: currentUser(c).login,
       maxBatches: body.maxBatches,
+      forceCount: body.forceCount,
     });
 
   const stub = getSyncChainStub(c.env);
   const r = await stub.fetch("https://do/start", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ maxBatches: body.maxBatches }),
+    body: JSON.stringify({
+      maxBatches: body.maxBatches,
+      forceCount: body.forceCount,
+    }),
   });
-  const data = await r.json<{ ok: boolean; alreadyRunning?: boolean; scheduled?: boolean; page?: number; batches?: number; maxBatches?: number }>();
+  const data = await r.json<{ ok: boolean; alreadyRunning?: boolean; scheduled?: boolean; page?: number; batches?: number; maxBatches?: number; forceCount?: number }>();
   return c.json(data);
 });
 

@@ -35,11 +35,26 @@ export interface BatchResult {
   processed: number;   // PRs we actually re-fetched + upserted
   skipped: number;     // PRs that were already current in the mirror
   failed: number;      // syncPr() throws that we caught (logged)
+  forcedConsumed: number; // how many of `processed` were forced refreshes
   hasMore: boolean;    // true iff caller should run another batch
   reason: string;      // why we stopped (for the log)
 }
 
-export async function refreshPrsBatch(env: Env, page: number): Promise<BatchResult> {
+/**
+ * Process one page of upstream PRs.
+ *
+ * `forceRemaining` is the running count of items the caller wants synced
+ * regardless of the watermark — typically 50 (= `REFRESH_PER_PAGE`), one
+ * page worth, so a Manual Refresh always re-fetches what's visible on the
+ * main UI. The forced budget is consumed left-to-right (newest first) so
+ * the most-recently-touched PRs are guaranteed-current after one click,
+ * even if their mirror.updated_at hasn't actually drifted.
+ *
+ * Items beyond the forced budget go through the normal watermark check
+ * (skip if mirror is current, sync otherwise). Once both the forced budget
+ * is exhausted AND a page is fully current, the chain stops.
+ */
+export async function refreshPrsBatch(env: Env, page: number, forceRemaining = 0): Promise<BatchResult> {
   const installationId = parseInt(env.GITHUB_INSTALLATION_ID, 10);
   const owner = env.UPSTREAM_OWNER;
   const repo = env.UPSTREAM_REPO;
@@ -56,7 +71,7 @@ export async function refreshPrsBatch(env: Env, page: number): Promise<BatchResu
   }>>();
 
   if (items.length === 0) {
-    return { page, scanned: 0, processed: 0, skipped: 0, failed: 0, hasMore: false, reason: "end-of-list" };
+    return { page, scanned: 0, processed: 0, skipped: 0, failed: 0, forcedConsumed: 0, hasMore: false, reason: "end-of-list" };
   }
 
   // Look up the mirror rows for these PRs in one query so we can compare
@@ -77,25 +92,33 @@ export async function refreshPrsBatch(env: Env, page: number): Promise<BatchResu
   const knownById = new Map(known.map((r) => [r.id, r]));
 
   // Decide which items need a re-fetch. Reasons:
+  //  - forced (top of upstream list, within the caller's force budget)
   //  - new (not in mirror yet)
   //  - GitHub updated_at > mirror updated_at (real upstream change)
   //  - open + not-merged with mergeable IS NULL: backfill freshly-added
   //    mergeable field. Once populated, the row hits the normal watermark
   //    on subsequent passes.
-  const stale: Array<{ number: number; id: number }> = [];
+  const stale: Array<{ number: number; id: number; forced: boolean }> = [];
+  let forcedThisPage = 0;
   for (const item of items) {
+    const forced = forcedThisPage < forceRemaining;
+    if (forced) {
+      stale.push({ number: item.number, id: item.id, forced: true });
+      forcedThisPage++;
+      continue;
+    }
     const have = knownById.get(item.id);
     const itemUpdated = new Date(item.updated_at);
     if (!have) {
-      stale.push({ number: item.number, id: item.id });
+      stale.push({ number: item.number, id: item.id, forced: false });
       continue;
     }
     if (have.updatedAt.getTime() < itemUpdated.getTime()) {
-      stale.push({ number: item.number, id: item.id });
+      stale.push({ number: item.number, id: item.id, forced: false });
       continue;
     }
     if (have.state === "open" && !have.merged && have.mergeable === null) {
-      stale.push({ number: item.number, id: item.id });
+      stale.push({ number: item.number, id: item.id, forced: false });
       continue;
     }
   }
@@ -105,6 +128,7 @@ export async function refreshPrsBatch(env: Env, page: number): Promise<BatchResu
   const toSync = stale.slice(0, MAX_SYNCS_PER_BATCH);
   let processed = 0;
   let failed = 0;
+  let forcedConsumed = 0;
 
   // Sync in parallel — Promise.allSettled so one PR failure doesn't kill the
   // batch (we log it and move on).
@@ -112,7 +136,7 @@ export async function refreshPrsBatch(env: Env, page: number): Promise<BatchResu
     toSync.map(async (s) => {
       try {
         await syncPr(env, 0, s.number);
-        return { ok: true as const, number: s.number };
+        return { ok: true as const, number: s.number, forced: s.forced };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         await syncLog(env, "error", "sync.pr.error", `pr #${s.number}: ${message}`, {
@@ -120,38 +144,49 @@ export async function refreshPrsBatch(env: Env, page: number): Promise<BatchResu
           page,
           stack: err instanceof Error ? err.stack : undefined,
         });
-        return { ok: false as const, number: s.number, message };
+        return { ok: false as const, number: s.number, forced: s.forced, message };
       }
     }),
   );
   for (const r of results) {
-    if (r.status === "fulfilled" && r.value.ok) processed++;
-    else failed++;
+    if (r.status === "fulfilled" && r.value.ok) {
+      processed++;
+      if (r.value.forced) forcedConsumed++;
+    } else {
+      failed++;
+    }
   }
 
+  // skipped = items that we looked at on this page but did not enqueue
+  // (watermark says they're current). Forced items never count as skipped.
   const skipped = items.length - stale.length;
 
-  // Stop conditions:
+  // Stop conditions (evaluated top-to-bottom; first match wins):
   //  1. End of list (we got less than a full page → no more pages exist).
-  //  2. Whole page was current AND we didn't have to cap (no leftover stale)
-  //     → watermark hit; everything older is also current.
-  //  3. We hit the per-batch sync cap → there are more stale items on THIS
-  //     page; the chain should retry the same page to drain them.
+  //  2. Stale items left over after the per-batch cap → re-run THIS page
+  //     (page-not-drained). Checked before watermark so a forced budget
+  //     that exceeds MAX_SYNCS_PER_BATCH correctly tells the chain to
+  //     come back to this page.
+  //  3. Forced budget exhausted AND nothing else stale on this page →
+  //     watermark hit, everything older is current.
+  //  4. Full page consumed, stale items still expected on next page →
+  //     advance.
+  const forceLeftAfterPage = forceRemaining - forcedThisPage;
   let hasMore: boolean;
   let reason: string;
   if (items.length < REFRESH_PER_PAGE) {
     hasMore = false;
     reason = "end-of-list";
-  } else if (stale.length === 0) {
-    hasMore = false;
-    reason = "watermark-hit";
   } else if (stale.length > toSync.length) {
     hasMore = true;
     reason = "page-not-drained";
+  } else if (forceLeftAfterPage <= 0 && stale.length === forcedThisPage) {
+    hasMore = false;
+    reason = "watermark-hit";
   } else {
     hasMore = true;
     reason = "next-page";
   }
 
-  return { page, scanned: items.length, processed, skipped, failed, hasMore, reason };
+  return { page, scanned: items.length, processed, skipped, failed, forcedConsumed, hasMore, reason };
 }
