@@ -160,3 +160,5 @@ gh secret set CLOUDFLARE_ACCOUNT_ID --body <your-account-id>
 - Add a `saved_view` UI for custom PR filters.
 - Optional: stand up a small VM if you ever want real `git` operations
   (push, merge, cherry-pick) — Workers cannot run git binaries.
+
+<!-- ci: preview pipeline smoke test, safe to delete -->
