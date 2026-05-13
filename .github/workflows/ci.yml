@@ -38,3 +38,6 @@ jobs:
 
       - name: Bundle Worker (dry-run, validates wrangler.toml)
         run: npx wrangler deploy --dry-run --outdir .wrangler/tmp
+
+      - name: Run tests
+        run: npm test
