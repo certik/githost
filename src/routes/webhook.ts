@@ -47,14 +47,30 @@ webhookRoutes.post("/github", async (c) => {
     return c.text("invalid json", 400);
   }
 
+  // Defensive repo filter. The App may be installed on multiple repos (e.g.
+  // certik/githost for self-CI), but we only mirror env.UPSTREAM_OWNER/REPO.
+  // Ignoring foreign events prevents accidental cross-repo data corruption
+  // (syncPr always fetches from UPSTREAM, so a foreign-repo PR number would
+  // hit the wrong row in our mirror).
+  const repoFullName = payload?.repository?.full_name ?? null;
+  const expectedRepo = `${c.env.UPSTREAM_OWNER}/${c.env.UPSTREAM_REPO}`;
+  if (repoFullName && repoFullName !== expectedRepo) {
+    await syncLog(c.env, "info", "webhook.ignored-foreign-repo",
+      `ignoring event=${event} from repo=${repoFullName} (expected ${expectedRepo})`, {
+        event, deliveryId, repo: repoFullName, expected: expectedRepo,
+      });
+    return c.json({ ok: true, ignored: "foreign-repo", repo: repoFullName });
+  }
+
   // Log every accepted delivery so we can correlate observed UI behavior
   // with what GitHub actually sent (visible at /logs).
   const action = payload?.action ?? null;
   const prNumber = payload?.pull_request?.number ?? payload?.issue?.number ?? null;
   await syncLog(c.env, "info", "webhook.received",
-    `event=${event} action=${action ?? "n/a"}${prNumber ? ` pr/issue=#${prNumber}` : ""}`, {
+    `event=${event} action=${action ?? "n/a"}${prNumber ? ` pr/issue=#${prNumber}` : ""} repo=${repoFullName ?? "?"}`, {
       event, action, deliveryId,
       prNumber,
+      repo: repoFullName,
       merged: payload?.pull_request?.merged ?? null,
       state: payload?.pull_request?.state ?? payload?.issue?.state ?? null,
     });
