@@ -111,7 +111,39 @@ npm run db:apply:mirror:remote
 4. Run smoke tests.
 5. Apply to remote during low traffic.
 
-## Tests
+## Local development
+
+```bash
+npm install                     # one-time
+cp .dev.vars.example .dev.vars  # one-time — already has DEV_LOGIN_ENABLED=true
+npm run dev:seed                # apply migrations + insert fixture PRs/test runs
+npm run dev                     # wrangler (8787) + vite (5173), concurrently
+```
+
+Open one of:
+
+- **http://localhost:8787/auth/dev-login** — wrangler dev only, served with the
+  built SPA at `web/dist/`. Sets a session cookie and redirects to `/`.
+- **http://localhost:5173/auth/dev-login** — Vite dev with hot-reload; Vite
+  proxies `/api`, `/auth`, `/webhook`, `/healthz` to wrangler on 8787.
+
+The `dev-login` endpoint bypasses GitHub OAuth and creates an `app_user` named
+`dev` (override with `?login=alice`). It is **only enabled when**
+`DEV_LOGIN_ENABLED="true"` is in `.dev.vars` — in production that var is
+unset and the endpoint returns 404. Asserted by tests.
+
+### Fixture data
+
+`npm run dev:seed` populates:
+- 6 PRs covering every state badge (Draft / Ready for review / Merged /
+  Closed / open with no tests / open all-queued)
+- `pr_test_run` rows covering every dot color (passed / failed / running /
+  queued / not queued / with-logUrl / without-logUrl)
+
+Re-running the script overwrites the same rows (idempotent). To start from
+empty: `rm -rf .wrangler/state && npm run db:apply:local`.
+
+
 
 `@cloudflare/vitest-pool-workers` runs each test file inside a real `workerd`
 runtime with the bindings from `wrangler.toml`. Migrations are applied to local

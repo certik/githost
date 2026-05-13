@@ -24,6 +24,7 @@
     "db:apply:app:remote": "wrangler d1 migrations apply githost-app --remote",
     "db:apply:local": "npm run db:apply:mirror:local && npm run db:apply:app:local",
     "db:apply:remote": "npm run db:apply:mirror:remote && npm run db:apply:app:remote",
+    "dev:seed": "./scripts/seed-local.sh",
     "db:export:mirror": "wrangler d1 export githost-mirror --remote --output backups/mirror-$(date -u +%Y%m%dT%H%M%SZ).sql",
     "db:export:app": "wrangler d1 export githost-app --remote --output backups/app-$(date -u +%Y%m%dT%H%M%SZ).sql"
   },
