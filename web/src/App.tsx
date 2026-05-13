@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { html as diffHtml, parse as diffParse } from "diff2html";
 import "diff2html/bundles/css/diff2html.min.css";
-import { api, ApiError } from "./api";
+import { api, ApiError, type PrSummary, type TestRun, type TestStatus } from "./api";
 
 export default function App() {
   const { data: me } = useQuery({ queryKey: ["me"], queryFn: () => api.me(), staleTime: 60_000 });
@@ -90,20 +90,22 @@ function PrList({ signedIn }: { signedIn: boolean }) {
       {isLoading && <div className="text-zinc-500">Loading…</div>}
       {error && <div className="text-red-600 text-sm">{String((error as Error).message)}</div>}
 
-      <ul className="divide-y rounded border bg-white">
+      <ul className="divide-y rounded border bg-white text-sm">
+        <li className="px-4 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 grid grid-cols-[1fr_8rem_4.5rem_4.5rem] gap-3 items-center">
+          <span>Pull request</span>
+          <span>State</span>
+          <span className="text-center" title="Quick tests">Quick</span>
+          <span className="text-center" title="Exhaustive tests">Exhaustive</span>
+        </li>
         {data?.items.map((p) => (
-          <li key={p.id} className="px-4 py-3 hover:bg-zinc-50">
-            <Link to={`/pr/${p.number}`} className="flex items-baseline gap-3">
-              <span className={`text-xs px-2 py-0.5 rounded-full ${
-                p.merged ? "bg-purple-100 text-purple-700" :
-                p.state === "open" ? "bg-green-100 text-green-700" :
-                "bg-zinc-200 text-zinc-700"
-              }`}>
-                {p.merged ? "merged" : p.state}
-              </span>
-              <span className="text-zinc-900 font-medium">{p.title}</span>
-              <span className="text-zinc-500 text-sm">#{p.number} by {p.authorLogin ?? "?"}</span>
+          <li key={p.id} className="px-4 py-3 hover:bg-zinc-50 grid grid-cols-[1fr_8rem_4.5rem_4.5rem] gap-3 items-center">
+            <Link to={`/pr/${p.number}`} className="flex items-baseline gap-2 min-w-0">
+              <span className="text-zinc-900 font-medium truncate">{p.title}</span>
+              <span className="text-zinc-500 text-xs whitespace-nowrap">#{p.number} by {p.authorLogin ?? "?"}</span>
             </Link>
+            <span><PrStateBadge pr={p} /></span>
+            <span className="flex justify-center"><TestStatusDot run={p.quickTest} label="Quick" /></span>
+            <span className="flex justify-center"><TestStatusDot run={p.exhaustiveTest} label="Exhaustive" /></span>
           </li>
         ))}
         {data && data.items.length === 0 && (
@@ -114,6 +116,51 @@ function PrList({ signedIn }: { signedIn: boolean }) {
       </ul>
     </div>
   );
+}
+
+function PrStateBadge({ pr }: { pr: PrSummary }) {
+  let label: string;
+  let cls: string;
+  if (pr.merged) {
+    label = "Merged";
+    cls = "bg-purple-100 text-purple-700";
+  } else if (pr.state === "closed") {
+    label = "Closed";
+    cls = "bg-zinc-200 text-zinc-700";
+  } else if (pr.draft) {
+    label = "Draft";
+    cls = "bg-zinc-100 text-zinc-600 border border-zinc-300";
+  } else {
+    label = "Ready for review";
+    cls = "bg-green-100 text-green-700";
+  }
+  return <span className={`text-xs px-2 py-0.5 rounded-full whitespace-nowrap ${cls}`}>{label}</span>;
+}
+
+/**
+ * GitHub-style status dot. Five visual states:
+ *   - not queued: empty ring (gray border, no fill)
+ *   - queued:     amber dot
+ *   - running:    blue dot with pulsing animation
+ *   - passed:     green dot
+ *   - failed:     red dot
+ * Hovering shows the status + head_sha (when present).
+ */
+function TestStatusDot({ run, label }: { run: TestRun | null; label: string }) {
+  const status: TestStatus | null = run?.status ?? null;
+  let cls = "border border-zinc-300";
+  let humanStatus = "not queued";
+  if (status === "queued") { cls = "bg-amber-400"; humanStatus = "queued"; }
+  else if (status === "running") { cls = "bg-blue-500 animate-pulse"; humanStatus = "running"; }
+  else if (status === "passed") { cls = "bg-green-500"; humanStatus = "passed"; }
+  else if (status === "failed") { cls = "bg-red-500"; humanStatus = "failed"; }
+
+  let title = `${label}: ${humanStatus}`;
+  if (run?.headSha) title += ` @ ${run.headSha.slice(0, 7)}`;
+  const dot = <span className={`inline-block w-3 h-3 rounded-full ${cls}`} title={title} aria-label={title} />;
+  return run?.logUrl
+    ? <a href={run.logUrl} target="_blank" rel="noreferrer" className="inline-flex">{dot}</a>
+    : dot;
 }
 
 function PrDetail() {

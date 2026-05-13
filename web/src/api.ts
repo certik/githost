@@ -1,3 +1,14 @@
+export type TestStatus = "queued" | "running" | "passed" | "failed";
+
+export interface TestRun {
+  status: TestStatus;
+  headSha: string | null;
+  startedAt: number | null;
+  finishedAt: number | null;
+  logUrl: string | null;
+  updatedAt: number;
+}
+
 export interface PrSummary {
   id: number;
   number: number;
@@ -10,6 +21,8 @@ export interface PrSummary {
   createdAt: number;
   updatedAt: number;
   authorLogin: string | null;
+  quickTest: TestRun | null;
+  exhaustiveTest: TestRun | null;
 }
 
 export interface PrDetailResponse {
