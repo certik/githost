@@ -56,8 +56,11 @@ jobs:
           output=$(npx wrangler versions upload --env preview \
             --message "PR #${{ github.event.pull_request.number }} @ ${{ github.sha }}" \
             --tag "pr-${{ github.event.pull_request.number }}" 2>&1 | tee /dev/stderr)
-          # Extract the preview URL printed by wrangler (line containing "workers.dev").
-          preview_url=$(printf '%s\n' "$output" | grep -Eo 'https://[a-z0-9-]+\.workers\.dev' | head -n1)
+          # Wrangler prints exactly one line of the form:
+          #   "Version Preview URL: https://<hash>-githost-preview.<acct>.workers.dev"
+          # Extract the URL from that specific line for robustness.
+          preview_url=$(printf '%s\n' "$output" \
+            | awk '/Version Preview URL:/ { print $NF; exit }')
           if [ -z "$preview_url" ]; then
             echo "::error::Could not extract preview URL from wrangler output"
             exit 1
