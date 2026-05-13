@@ -40,19 +40,28 @@ migrations_dir = "migrations/app"
 binding = "DIFF_CACHE"
 id = "babcea2ca8374157bc1405e26c3fb25a"
 
+# Service binding to ourselves, used by the server-side resync chain to spawn
+# follow-up batch invocations. We can't use plain `fetch(selfUrl)` because
+# Cloudflare blocks Worker→same-Worker public URL calls to prevent infinite
+# loops; that path hits Static Assets and 404s. A self-service-binding
+# triggers our own Worker handler with a fresh wall-clock + subrequest
+# budget. See src/routes/api.ts spawnChainLink().
+[[services]]
+binding = "SELF"
+service = "githost"
+
 # NOTE: Workers Free plan does not include Queues. We use `ctx.waitUntil()` for
 # async work instead — the webhook handler returns 200 immediately and continues
 # processing in the background. To switch to Queues later, restore the
 # `[[queues.producers]]` / `[[queues.consumers]]` stanzas, set `JOBS` in Env,
 # and replace `runJob(msg, env, ctx)` calls with `env.JOBS.send(msg)`.
 
-# Cron triggers (UTC).
-#  - 03:00 daily: delta resync sweep to repair drift from missed webhooks.
-# Backups: performed by GitHub Actions (wrangler d1 export → GH artifact),
-# not by the Worker. This avoids needing R2 (and any payment method) on the
-# Workers Free plan.
+# Cron triggers — DISABLED. We rely on GitHub webhooks for real-time updates
+# and the server-side resync chain (POST /api/refresh → chained
+# /api/internal/sync-batch calls) for on-demand catch-up. No cron means no
+# silent background sync hiding webhook delivery bugs.
 [triggers]
-crons = ["0 3 * * *"]
+crons = []
 
 # Secrets (set via `wrangler secret put NAME`):
 #   GITHUB_APP_ID

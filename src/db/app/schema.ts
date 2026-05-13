@@ -138,3 +138,19 @@ export const checkKindMap = sqliteTable("check_kind_map", {
 }, (t) => ({
   kindIdx: index("check_kind_map_kind_idx").on(t.kind),
 }));
+
+/**
+ * Operational log for the autonomous resync chain. Written by sync-log helper.
+ * Viewable at /logs in the UI. Capped at 1000 rows (oldest pruned).
+ */
+export const syncLog = sqliteTable("sync_log", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  ts: integer("ts", { mode: "timestamp_ms" }).notNull(),
+  level: text("level").notNull(),                           // "info" | "warn" | "error"
+  event: text("event").notNull(),
+  message: text("message").notNull(),
+  context: text("context"),                                 // JSON
+}, (t) => ({
+  tsIdx: index("sync_log_ts_idx").on(t.ts),
+  levelIdx: index("sync_log_level_idx").on(t.level),
+}));

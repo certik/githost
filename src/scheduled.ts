@@ -1,18 +1,14 @@
 import type { Env } from "./lib/env";
-import { runJob } from "./jobs/consumer";
 
 /**
- * Cron triggers:
- *   "0 3 * * *"  → daily resync sweep (repair drift from missed webhooks).
+ * Cron handler. Currently DISABLED — `wrangler.toml` has no `crons` set, so
+ * this is never invoked in production. Kept as a stub so re-enabling later
+ * (e.g. a backstop resync trigger) is a one-line change in wrangler.toml.
  *
- * Backups are performed by a GitHub Actions workflow (`wrangler d1 export`),
- * not by the Worker — see `.github/workflows/backup.yml` (added once CI is set
- * up). This keeps the free plan working without R2.
+ * Rationale: while we're hardening webhook + manual-refresh reliability, a
+ * cron would silently paper over missed webhooks and hide bugs. Once the
+ * core path is rock-solid we can add cron as belt-and-suspenders.
  */
-export async function handleScheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-  if (event.cron === "0 3 * * *") {
-    runJob({ type: "sync.full", resource: "prs" }, env, ctx);
-    runJob({ type: "sync.full", resource: "issues" }, env, ctx);
-    runJob({ type: "sync.full", resource: "comments" }, env, ctx);
-  }
+export async function handleScheduled(_event: ScheduledEvent, _env: Env, _ctx: ExecutionContext): Promise<void> {
+  // intentionally empty
 }

@@ -5,6 +5,7 @@ import { html as diffHtml, parse as diffParse } from "diff2html";
 import "diff2html/bundles/css/diff2html.min.css";
 import { api, ApiError, type PrSummary, type TestRun, type TestStatus } from "./api";
 import { groupForReviewPriority } from "./lib/review-priority";
+import Logs from "./Logs";
 
 type SortMode = "review-priority" | "newest";
 const SORT_MODE_KEY = "githost.sortMode";
@@ -26,6 +27,7 @@ export default function App() {
         <Link to="/" className="font-semibold text-zinc-900">githost</Link>
         <nav className="text-sm text-zinc-600 flex gap-4 flex-1">
           <Link to="/" className="hover:text-zinc-900">PRs</Link>
+          <Link to="/logs" className="hover:text-zinc-900">Sync log</Link>
         </nav>
         {me?.user ? (
           <div className="flex items-center gap-3 text-sm">
@@ -46,6 +48,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<PrList signedIn={!!me?.user} />} />
           <Route path="/pr/:number" element={<PrDetail />} />
+          <Route path="/logs" element={<Logs />} />
           <Route path="*" element={<div className="text-zinc-500">Not found.</div>} />
         </Routes>
       </main>
@@ -85,6 +88,21 @@ function PrList({ signedIn }: { signedIn: boolean }) {
       ? (refresh.error as Error).message
       : null;
 
+  // Format the refresh result for the user. The chain keeps running on the
+  // server after we get this first-batch response, so we tell the user that
+  // more catch-up is in flight if hasMore is true.
+  const refreshSummary = refresh.data
+    ? (() => {
+        const r = refresh.data;
+        if (typeof r.processed !== "number") return null;
+        const parts = [`synced ${r.processed}`];
+        if (r.skipped) parts.push(`${r.skipped} up to date`);
+        if (r.failed) parts.push(`${r.failed} failed`);
+        const tail = r.hasMore ? " — chain still running in background" : "";
+        return parts.join(", ") + tail;
+      })()
+    : null;
+
   return (
     <div className="max-w-5xl mx-auto">
       <div className="flex items-center justify-between mb-4">
@@ -109,11 +127,17 @@ function PrList({ signedIn }: { signedIn: boolean }) {
             onClick={() => refresh.mutate()}
             disabled={refresh.isPending || !signedIn}
             title={signedIn ? undefined : "Sign in to refresh from GitHub"}
-          >{refresh.isPending ? "Queuing…" : "Manual refresh"}</button>
+          >{refresh.isPending ? "Refreshing…" : "Manual refresh"}</button>
         </div>
       </div>
 
       {refreshError && <div className="mb-3 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">{refreshError}</div>}
+      {refreshSummary && !refreshError && (
+        <div className="mb-3 text-sm text-emerald-800 bg-emerald-50 border border-emerald-200 rounded px-3 py-2 flex items-center justify-between">
+          <span>{refreshSummary}</span>
+          <Link to="/logs" className="text-xs underline text-emerald-700 hover:text-emerald-900">view sync log</Link>
+        </div>
+      )}
       {isLoading && <div className="text-zinc-500">Loading…</div>}
       {error && <div className="text-red-600 text-sm">{String((error as Error).message)}</div>}
 
