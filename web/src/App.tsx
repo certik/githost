@@ -10,7 +10,10 @@ export default function App() {
   const qc = useQueryClient();
   const logout = useMutation({
     mutationFn: () => api.logout(),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["me"] }),
+    // After the server clears the cookie, do a full-page navigation to the
+    // signed-out splash. This unmounts the SPA (and drops React Query's PR
+    // cache), so the user can't see stale authenticated state.
+    onSuccess: () => { window.location.assign("/auth/signed-out"); },
   });
 
   return (

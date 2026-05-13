@@ -130,6 +130,38 @@ authRoutes.post("/logout", async (c) => {
   return c.json({ ok: true });
 });
 
+/**
+ * Static "signed out" splash page. Served as a regular Worker HTML response —
+ * not part of the SPA — so logging out can drop the React tree (and its
+ * cached PR data) without forcing the user through the GitHub OAuth round-trip
+ * just to confirm they're signed out.
+ *
+ * Lives under /auth/* so it's reachable anonymously (the worker gate exempts
+ * /auth/*).
+ */
+authRoutes.get("/signed-out", (c) => {
+  return c.html(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Signed out — githost</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; padding: 4rem 2rem; max-width: 480px; margin: auto; color: #18181b; background: #fafafa; }
+    h1 { font-size: 1.5rem; margin: 0 0 0.5rem; }
+    p { color: #52525b; margin: 0 0 2rem; }
+    a.btn { display: inline-block; padding: 0.5rem 1rem; background: #18181b; color: white; text-decoration: none; border-radius: 0.375rem; font-size: 0.9rem; }
+    a.btn:hover { background: #27272a; }
+  </style>
+</head>
+<body>
+  <h1>You're signed out</h1>
+  <p>Your session has ended. Click below to sign in again.</p>
+  <a class="btn" href="/auth/login">Sign in with GitHub</a>
+</body>
+</html>`);
+});
+
 function readCookie(header: string | undefined, name: string): string | undefined {
   if (!header) return undefined;
   for (const part of header.split(/;\s*/)) {
