@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, type SyncLogEntry } from "./api";
 
@@ -14,12 +14,27 @@ import { api, type SyncLogEntry } from "./api";
 export default function Logs() {
   const [level, setLevel] = useState<string>("");
   const [event, setEvent] = useState<string>("");
+  const [q, setQ] = useState<string>("");
   const [paused, setPaused] = useState(false);
   const [limit, setLimit] = useState(200);
 
+  // Debounce the substring search a bit so each keystroke doesn't fire a
+  // request. Event/level changes are not debounced — those are dropdown
+  // selections, instant intent.
+  const [debouncedQ, setDebouncedQ] = useState(q);
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQ(q), 250);
+    return () => clearTimeout(t);
+  }, [q]);
+
   const { data, isLoading, error, refetch, isFetching } = useQuery({
-    queryKey: ["logs", level, event, limit],
-    queryFn: () => api.logs({ limit, level: level || undefined, event: event || undefined }),
+    queryKey: ["logs", level, event, debouncedQ, limit],
+    queryFn: () => api.logs({
+      limit,
+      level: level || undefined,
+      event: event || undefined,
+      q: debouncedQ || undefined,
+    }),
     refetchInterval: paused ? false : 5_000,
     staleTime: 0,
   });
@@ -46,6 +61,13 @@ export default function Logs() {
             value={event}
             onChange={(e) => setEvent(e.target.value)}
             title="Exact event match, e.g. sync.batch.done"
+          />
+          <input
+            className="border rounded px-2 py-1 text-sm w-56"
+            placeholder="search event/message/context…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            title="Substring search across event, message, and context. e.g. pull_request, #11396"
           />
           <select
             className="border rounded px-2 py-1 text-sm"

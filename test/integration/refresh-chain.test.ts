@@ -335,6 +335,28 @@ describe("GET /api/logs", () => {
     expect(body.items[0]!.level).toBe("error");
   });
 
+  it("filters by substring across event/message/context via ?q=", async () => {
+    const userId = crypto.randomUUID();
+    const sessionId = `s-${crypto.randomUUID()}`;
+    const now = Date.now();
+    await env.APP_DB.prepare("INSERT INTO app_user (id, gh_user_id, login, created_at) VALUES (?, ?, ?, ?)")
+      .bind(userId, 44, "tester3", now).run();
+    await env.APP_DB.prepare("INSERT INTO user_session (id, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)")
+      .bind(sessionId, userId, now + 60_000, now).run();
+
+    // Three rows: 'q' should match in event (row 1), message (row 2), context (row 3); row 4 should be excluded.
+    await env.APP_DB.prepare("INSERT INTO sync_log (ts, level, event, message, context) VALUES (?, 'info', 'pull_request.opened', 'opened', NULL)").bind(1000).run();
+    await env.APP_DB.prepare("INSERT INTO sync_log (ts, level, event, message, context) VALUES (?, 'info', 'webhook.received', 'event=pull_request action=opened', NULL)").bind(2000).run();
+    await env.APP_DB.prepare("INSERT INTO sync_log (ts, level, event, message, context) VALUES (?, 'info', 'other', 'unrelated', '{\"event\":\"pull_request\"}')").bind(3000).run();
+    await env.APP_DB.prepare("INSERT INTO sync_log (ts, level, event, message, context) VALUES (?, 'info', 'sync.batch.done', 'batch info', NULL)").bind(4000).run();
+
+    const res = await workerFetch("/api/logs?q=pull_request", { headers: { cookie: `gh_session=${sessionId}` } });
+    const body = await res.json<{ items: Array<{ event: string; message: string }> }>();
+    expect(body.items.length).toBe(3);
+    // Newest first (rows seeded with ts 3000 > 2000 > 1000):
+    expect(body.items.map((r) => r.event)).toEqual(["other", "webhook.received", "pull_request.opened"]);
+  });
+
   it("requires a session", async () => {
     const res = await workerFetch("/api/logs");
     expect(res.status).toBe(401);

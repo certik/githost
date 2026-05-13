@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, like, or, sql } from "drizzle-orm";
 import type { Env } from "../lib/env";
 import { mirrorDb } from "../db/mirror";
 import * as M from "../db/mirror/schema";
@@ -278,17 +278,32 @@ apiRoutes.post("/refresh/reset", async (c) => {
   return new Response(r.body, { status: r.status, headers: { "content-type": "application/json" } });
 });
 
-// GET /api/logs?limit=200&level=error&event=sync.pr.error
+// GET /api/logs?limit=200&level=error&event=sync.pr.error&q=substring
 // Returns recent sync_log rows, newest first. Allowlist-gated by requireSession.
+// `q` does a case-insensitive substring search across event, message, and
+// context columns — useful for finding all rows mentioning a PR number or
+// event type (e.g. q=pull_request matches both event='pull_request' and any
+// webhook.received row whose message contains 'pull_request').
 apiRoutes.get("/logs", async (c) => {
   const limit = Math.min(parseInt(c.req.query("limit") ?? "200", 10) || 200, 1000);
   const level = c.req.query("level");
   const event = c.req.query("event");
+  const q = c.req.query("q");
 
   const db = appDb(c.env.APP_DB);
-  const conds: ReturnType<typeof eq>[] = [];
+  const conds = [];
   if (level) conds.push(eq(A.syncLog.level, level));
   if (event) conds.push(eq(A.syncLog.event, event));
+  if (q) {
+    const pattern = `%${q}%`;
+    // SQLite LIKE is case-insensitive on ASCII by default — good enough for
+    // event/message/context grep. No FTS5 needed at this scale.
+    conds.push(or(
+      like(A.syncLog.event, pattern),
+      like(A.syncLog.message, pattern),
+      like(A.syncLog.context, pattern),
+    )!);
+  }
 
   const rows = await db.select().from(A.syncLog)
     .where(conds.length ? and(...conds) : sql`1=1`)

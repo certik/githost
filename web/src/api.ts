@@ -105,12 +105,13 @@ export const api = {
       body: JSON.stringify({ resource, ...(opts?.maxBatches ? { maxBatches: opts.maxBatches } : {}) }),
     }),
   refreshStatus: () => j<SyncStatus>(`/api/refresh/status`),
-  logs: (opts?: { limit?: number; level?: string; event?: string }) => {
-    const q = new URLSearchParams();
-    if (opts?.limit) q.set("limit", String(opts.limit));
-    if (opts?.level) q.set("level", opts.level);
-    if (opts?.event) q.set("event", opts.event);
-    const qs = q.toString();
+  logs: (opts?: { limit?: number; level?: string; event?: string; q?: string }) => {
+    const params = new URLSearchParams();
+    if (opts?.limit) params.set("limit", String(opts.limit));
+    if (opts?.level) params.set("level", opts.level);
+    if (opts?.event) params.set("event", opts.event);
+    if (opts?.q)     params.set("q", opts.q);
+    const qs = params.toString();
     return j<{ items: SyncLogEntry[] }>(`/api/logs${qs ? `?${qs}` : ""}`);
   },
   logout: () => fetch(`/auth/logout`, { method: "POST", credentials: "include" }),
