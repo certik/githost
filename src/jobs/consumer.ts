@@ -3,6 +3,9 @@ import { syncPr } from "./sync-pr";
 import { syncIssue } from "./sync-issue";
 import { fullResync } from "./full-resync";
 import { runAiReview } from "./ai-review";
+import { mirrorDb } from "../db/mirror";
+import * as M from "../db/mirror/schema";
+import { eq } from "drizzle-orm";
 
 /**
  * Fire a background job from inside any request/cron handler.
@@ -58,6 +61,9 @@ async function handleWebhook(
     repository?: { id?: number };
     pull_request?: { number?: number };
     issue?: { number?: number; pull_request?: unknown };
+    check_run?: { head_sha?: string; pull_requests?: Array<{ number?: number }> };
+    check_suite?: { head_sha?: string; pull_requests?: Array<{ number?: number }> };
+    workflow_run?: { head_sha?: string; pull_requests?: Array<{ number?: number }> };
   };
   const repoId = p.repository?.id;
   if (!repoId) return;
@@ -79,7 +85,34 @@ async function handleWebhook(
       else runJob({ type: "sync.issue", repoId, number: num }, env, ctx);
       break;
     }
+    // CI events: GitHub Actions firing → status of one of our buckets changed.
+    // The payload includes head_sha + pull_requests[] for PRs the SHA belongs
+    // to (only PRs in the same repo as the workflow, but that's exactly what
+    // we mirror). When pull_requests is empty (e.g. on a push to a branch
+    // before any PR exists), we look up the PR by head_sha in our mirror DB
+    // — covers the common case of "GH delivered check_run before pull_request".
+    case "check_run":
+    case "check_suite":
+    case "workflow_run": {
+      const ev = p.check_run ?? p.check_suite ?? p.workflow_run;
+      if (!ev) break;
+      const fromPayload = (ev.pull_requests ?? []).map((pr) => pr.number).filter((n): n is number => typeof n === "number");
+      const numbers = fromPayload.length ? fromPayload : await prNumbersByHeadSha(env, ev.head_sha ?? null);
+      for (const n of numbers) runJob({ type: "sync.pr", repoId, number: n }, env, ctx);
+      break;
+    }
     default:
       break;
   }
+}
+
+/**
+ * Look up open PR numbers by head SHA in the mirror DB. Used when a webhook
+ * delivery doesn't include the PR(s) it relates to.
+ */
+async function prNumbersByHeadSha(env: Env, headSha: string | null): Promise<number[]> {
+  if (!headSha) return [];
+  const db = mirrorDb(env.MIRROR_DB);
+  const rows = await db.select({ number: M.pr.number }).from(M.pr).where(eq(M.pr.headSha, headSha)).all();
+  return rows.map((r) => r.number);
 }
