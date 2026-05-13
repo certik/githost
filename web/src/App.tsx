@@ -3,20 +3,41 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { html as diffHtml, parse as diffParse } from "diff2html";
 import "diff2html/bundles/css/diff2html.min.css";
-import { api } from "./api";
+import { api, ApiError } from "./api";
 
 export default function App() {
+  const { data: me } = useQuery({ queryKey: ["me"], queryFn: () => api.me(), staleTime: 60_000 });
+  const qc = useQueryClient();
+  const logout = useMutation({
+    mutationFn: () => api.logout(),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["me"] }),
+  });
+
   return (
     <div className="min-h-screen">
       <header className="border-b bg-white px-6 py-3 flex items-center gap-4">
         <Link to="/" className="font-semibold text-zinc-900">githost</Link>
-        <nav className="text-sm text-zinc-600 flex gap-4">
+        <nav className="text-sm text-zinc-600 flex gap-4 flex-1">
           <Link to="/" className="hover:text-zinc-900">PRs</Link>
         </nav>
+        {me?.user ? (
+          <div className="flex items-center gap-3 text-sm">
+            <span className="text-zinc-700">@{me.user.login}</span>
+            <button
+              onClick={() => logout.mutate()}
+              className="text-zinc-500 hover:text-zinc-900"
+            >Sign out</button>
+          </div>
+        ) : (
+          <a
+            href="/auth/login"
+            className="text-sm border rounded px-3 py-1 bg-white hover:bg-zinc-100"
+          >Sign in with GitHub</a>
+        )}
       </header>
       <main className="px-6 py-6">
         <Routes>
-          <Route path="/" element={<PrList />} />
+          <Route path="/" element={<PrList signedIn={!!me?.user} />} />
           <Route path="/pr/:number" element={<PrDetail />} />
           <Route path="*" element={<div className="text-zinc-500">Not found.</div>} />
         </Routes>
@@ -25,7 +46,7 @@ export default function App() {
   );
 }
 
-function PrList() {
+function PrList({ signedIn }: { signedIn: boolean }) {
   const [state, setState] = useState<"open" | "closed" | "all">("open");
   const qc = useQueryClient();
   const { data, isLoading, error } = useQuery({
@@ -36,6 +57,12 @@ function PrList() {
     mutationFn: () => api.refresh("prs"),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["prs"] }),
   });
+
+  const refreshError = refresh.error instanceof ApiError && refresh.error.status === 401
+    ? "Sign in to refresh from GitHub."
+    : refresh.error
+      ? (refresh.error as Error).message
+      : null;
 
   return (
     <div className="max-w-5xl mx-auto">
@@ -50,11 +77,13 @@ function PrList() {
           <button
             className="border rounded px-3 py-1 text-sm bg-white hover:bg-zinc-100 disabled:opacity-50"
             onClick={() => refresh.mutate()}
-            disabled={refresh.isPending}
+            disabled={refresh.isPending || !signedIn}
+            title={signedIn ? undefined : "Sign in to refresh from GitHub"}
           >{refresh.isPending ? "Queuing…" : "Manual refresh"}</button>
         </div>
       </div>
 
+      {refreshError && <div className="mb-3 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">{refreshError}</div>}
       {isLoading && <div className="text-zinc-500">Loading…</div>}
       {error && <div className="text-red-600 text-sm">{String((error as Error).message)}</div>}
 
@@ -75,7 +104,9 @@ function PrList() {
           </li>
         ))}
         {data && data.items.length === 0 && (
-          <li className="px-4 py-6 text-zinc-500 text-sm">No PRs yet. Hit “Manual refresh” to sync from GitHub.</li>
+          <li className="px-4 py-6 text-zinc-500 text-sm">
+            No PRs yet. {signedIn ? "Hit “Manual refresh” to sync from GitHub." : "Sign in and hit “Manual refresh” to sync from GitHub."}
+          </li>
         )}
       </ul>
     </div>
