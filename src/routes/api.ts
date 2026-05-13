@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Env } from "../lib/env";
 import { mirrorDb } from "../db/mirror";
 import * as M from "../db/mirror/schema";
@@ -65,7 +65,104 @@ apiRoutes.get("/prs", async (c) => {
   .offset(offset)
   .all();
 
-  return c.json({ items: rows, limit, offset });
+  // Pull test-run rows for these PR ids from the app DB and zip them in.
+  // Cross-DB so we do an in-memory join. Two rows max per PR (quick, exhaustive).
+  let items: Array<typeof rows[number] & { quickTest: TestRunOut | null; exhaustiveTest: TestRunOut | null }> = [];
+  if (rows.length === 0) {
+    items = [];
+  } else {
+    const prIds = rows.map((r) => r.id);
+    const adb = appDb(c.env.APP_DB);
+    const runs = await adb.select().from(A.prTestRun).where(inArray(A.prTestRun.prId, prIds)).all();
+
+    const byPr = new Map<number, { quick?: typeof runs[number]; exhaustive?: typeof runs[number] }>();
+    for (const r of runs) {
+      const slot = byPr.get(r.prId) ?? {};
+      if (r.kind === "quick") slot.quick = r;
+      else if (r.kind === "exhaustive") slot.exhaustive = r;
+      byPr.set(r.prId, slot);
+    }
+    items = rows.map((p) => ({
+      ...p,
+      quickTest: toTestRunOut(byPr.get(p.id)?.quick),
+      exhaustiveTest: toTestRunOut(byPr.get(p.id)?.exhaustive),
+    }));
+  }
+
+  return c.json({ items, limit, offset });
+});
+
+interface TestRunOut {
+  status: "queued" | "running" | "passed" | "failed";
+  headSha: string | null;
+  startedAt: number | null;
+  finishedAt: number | null;
+  logUrl: string | null;
+  updatedAt: number;
+}
+
+function toTestRunOut(r: { status: string; headSha: string | null; startedAt: Date | null; finishedAt: Date | null; logUrl: string | null; updatedAt: Date } | undefined): TestRunOut | null {
+  if (!r) return null;
+  return {
+    status: r.status as TestRunOut["status"],
+    headSha: r.headSha,
+    startedAt: r.startedAt ? r.startedAt.getTime() : null,
+    finishedAt: r.finishedAt ? r.finishedAt.getTime() : null,
+    logUrl: r.logUrl,
+    updatedAt: r.updatedAt.getTime(),
+  };
+}
+
+// PUT /api/prs/:number/tests/:kind
+// Body: { status: "queued"|"running"|"passed"|"failed", headSha?, logUrl?, startedAt?, finishedAt? }
+// Sets the latest test-run status for this PR. Idempotent; overwrites any
+// previous row. Authenticated — intended to be called by your CI runner with
+// a Worker-scoped session cookie or (future) a dedicated bot token.
+apiRoutes.put("/prs/:number/tests/:kind", async (c) => {
+  const number = parseInt(c.req.param("number"), 10);
+  const kind = c.req.param("kind");
+  if (kind !== "quick" && kind !== "exhaustive") {
+    return c.text("kind must be 'quick' or 'exhaustive'", 400);
+  }
+  const body = await c.req.json<{
+    status: "queued" | "running" | "passed" | "failed";
+    headSha?: string;
+    logUrl?: string;
+    startedAt?: number;
+    finishedAt?: number;
+  }>().catch(() => null);
+  if (!body || !["queued", "running", "passed", "failed"].includes(body.status)) {
+    return c.text("body.status must be one of queued|running|passed|failed", 400);
+  }
+
+  const mdb = mirrorDb(c.env.MIRROR_DB);
+  const pr = await mdb.select({ id: M.pr.id }).from(M.pr).where(eq(M.pr.number, number)).get();
+  if (!pr) return c.notFound();
+
+  const now = new Date();
+  const adb = appDb(c.env.APP_DB);
+  await adb.insert(A.prTestRun).values({
+    prId: pr.id,
+    kind,
+    status: body.status,
+    headSha: body.headSha ?? null,
+    startedAt: body.startedAt ? new Date(body.startedAt) : null,
+    finishedAt: body.finishedAt ? new Date(body.finishedAt) : null,
+    logUrl: body.logUrl ?? null,
+    updatedAt: now,
+  }).onConflictDoUpdate({
+    target: [A.prTestRun.prId, A.prTestRun.kind],
+    set: {
+      status: body.status,
+      headSha: body.headSha ?? null,
+      startedAt: body.startedAt ? new Date(body.startedAt) : null,
+      finishedAt: body.finishedAt ? new Date(body.finishedAt) : null,
+      logUrl: body.logUrl ?? null,
+      updatedAt: now,
+    },
+  }).run();
+
+  return c.json({ ok: true });
 });
 
 // GET /api/prs/:number

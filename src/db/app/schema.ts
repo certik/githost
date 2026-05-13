@@ -105,3 +105,21 @@ export const auditLog = sqliteTable("audit_log", {
   tableRowIdx: index("audit_log_table_row_idx").on(t.tableName, t.rowId),
   tsIdx: index("audit_log_ts_idx").on(t.ts),
 }));
+
+/**
+ * Per-PR test run status, written by external CI via PUT /api/prs/:n/tests/:kind.
+ * Logical FK to mirror.pr.id (cross-DB, not enforced).
+ */
+export const prTestRun = sqliteTable("pr_test_run", {
+  prId: integer("pr_id").notNull(),
+  kind: text("kind").notNull(),                             // "quick" | "exhaustive"
+  status: text("status").notNull(),                         // "queued" | "running" | "passed" | "failed"
+  headSha: text("head_sha"),
+  startedAt: integer("started_at", { mode: "timestamp_ms" }),
+  finishedAt: integer("finished_at", { mode: "timestamp_ms" }),
+  logUrl: text("log_url"),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.prId, t.kind] }),
+  statusIdx: index("pr_test_run_status_idx").on(t.status),
+}));
