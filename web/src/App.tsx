@@ -99,10 +99,10 @@ function PrList({ signedIn }: { signedIn: boolean }) {
         </li>
         {data?.items.map((p) => (
           <li key={p.id} className="px-4 py-3 hover:bg-zinc-50 grid grid-cols-[1fr_8rem_4.5rem_4.5rem] gap-3 items-center">
-            <Link to={`/pr/${p.number}`} className="flex items-baseline gap-2 min-w-0">
-              <span className="text-zinc-900 font-medium truncate">{p.title}</span>
+            <a href={p.htmlUrl} target="_blank" rel="noreferrer" className="flex items-baseline gap-2 min-w-0">
+              <span className="text-zinc-900 font-medium truncate hover:underline">{p.title}</span>
               <span className="text-zinc-500 text-xs whitespace-nowrap">#{p.number} by {p.authorLogin ?? "?"}</span>
-            </Link>
+            </a>
             <span><PrStateBadge pr={p} /></span>
             <span className="flex justify-center"><TestStatusDot run={p.quickTest} label="Quick" /></span>
             <span className="flex justify-center"><TestStatusDot run={p.exhaustiveTest} label="Exhaustive" /></span>

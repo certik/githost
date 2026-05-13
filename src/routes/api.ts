@@ -67,7 +67,13 @@ apiRoutes.get("/prs", async (c) => {
 
   // Pull test-run rows for these PR ids from the app DB and zip them in.
   // Cross-DB so we do an in-memory join. Two rows max per PR (quick, exhaustive).
-  let items: Array<typeof rows[number] & { quickTest: TestRunOut | null; exhaustiveTest: TestRunOut | null }> = [];
+  // Also compute the upstream GitHub URL per PR so the SPA can link out.
+  const repoUrl = `https://github.com/${c.env.UPSTREAM_OWNER}/${c.env.UPSTREAM_REPO}`;
+  let items: Array<typeof rows[number] & {
+    htmlUrl: string;
+    quickTest: TestRunOut | null;
+    exhaustiveTest: TestRunOut | null;
+  }> = [];
   if (rows.length === 0) {
     items = [];
   } else {
@@ -84,6 +90,7 @@ apiRoutes.get("/prs", async (c) => {
     }
     items = rows.map((p) => ({
       ...p,
+      htmlUrl: `${repoUrl}/pull/${p.number}`,
       quickTest: toTestRunOut(byPr.get(p.id)?.quick),
       exhaustiveTest: toTestRunOut(byPr.get(p.id)?.exhaustive),
     }));

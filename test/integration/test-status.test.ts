@@ -37,6 +37,7 @@ interface ApiPr {
   state: "open" | "closed";
   draft: boolean;
   merged: boolean;
+  htmlUrl: string;
   quickTest: { status: string; logUrl: string | null; headSha: string | null } | null;
   exhaustiveTest: { status: string } | null;
 }
@@ -147,7 +148,6 @@ describe("GET /api/prs state fields (Draft / Ready / Merged / Closed contract)",
     expect(pr?.draft).toBe(true);
     expect(pr?.merged).toBe(false);
   });
-
   it("returns draft=false, state=open for a 'ready for review' PR", async () => {
     const { cookie } = await createSession();
     await seedPr({ id: 100, number: 1, draft: false, state: "open" });
@@ -174,5 +174,16 @@ describe("GET /api/prs state fields (Draft / Ready / Merged / Closed contract)",
     const pr = items.find((p) => p.number === 1);
     expect(pr?.state).toBe("closed");
     expect(pr?.merged).toBe(false);
+  });
+});
+
+describe("GET /api/prs htmlUrl field (link to upstream GitHub PR)", () => {
+  it("constructs htmlUrl from UPSTREAM_OWNER/REPO + PR number", async () => {
+    // Test config: UPSTREAM_OWNER=testorg, UPSTREAM_REPO=testrepo
+    const { cookie } = await createSession();
+    await seedPr({ id: 100, number: 11488 });
+    const items = await getPrs(cookie);
+    const pr = items.find((p) => p.number === 11488);
+    expect(pr?.htmlUrl).toBe("https://github.com/testorg/testrepo/pull/11488");
   });
 });

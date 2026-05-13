@@ -21,6 +21,7 @@ export interface PrSummary {
   createdAt: number;
   updatedAt: number;
   authorLogin: string | null;
+  htmlUrl: string;
   quickTest: TestRun | null;
   exhaustiveTest: TestRun | null;
 }
