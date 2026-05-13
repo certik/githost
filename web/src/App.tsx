@@ -4,6 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import { html as diffHtml, parse as diffParse } from "diff2html";
 import "diff2html/bundles/css/diff2html.min.css";
 import { api, ApiError, type PrSummary, type TestRun, type TestStatus } from "./api";
+import { groupForReviewPriority } from "./lib/review-priority";
+
+type SortMode = "review-priority" | "newest";
+const SORT_MODE_KEY = "githost.sortMode";
 
 export default function App() {
   const { data: me } = useQuery({ queryKey: ["me"], queryFn: () => api.me(), staleTime: 60_000 });
@@ -51,6 +55,20 @@ export default function App() {
 
 function PrList({ signedIn }: { signedIn: boolean }) {
   const [state, setState] = useState<"open" | "closed" | "all">("open");
+  const [sortMode, setSortMode] = useState<SortMode>(() => {
+    // Persist the user's choice across reloads. Default is the new
+    // "review-priority" view; the old flat newest-first view is still
+    // selectable.
+    try {
+      const v = localStorage.getItem(SORT_MODE_KEY);
+      if (v === "newest" || v === "review-priority") return v;
+    } catch { /* localStorage unavailable; fall through */ }
+    return "review-priority";
+  });
+  useEffect(() => {
+    try { localStorage.setItem(SORT_MODE_KEY, sortMode); } catch { /* ignore */ }
+  }, [sortMode]);
+
   const qc = useQueryClient();
   const { data, isLoading, error } = useQuery({
     queryKey: ["prs", state],
@@ -72,6 +90,15 @@ function PrList({ signedIn }: { signedIn: boolean }) {
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-semibold">Pull requests</h1>
         <div className="flex items-center gap-2">
+          <select
+            className="border rounded px-2 py-1 text-sm"
+            value={sortMode}
+            onChange={(e) => setSortMode(e.target.value as SortMode)}
+            title="Sort mode"
+          >
+            <option value="review-priority">Review priority</option>
+            <option value="newest">Newest first</option>
+          </select>
           <select className="border rounded px-2 py-1 text-sm" value={state} onChange={(e) => setState(e.target.value as any)}>
             <option value="open">Open</option>
             <option value="closed">Closed</option>
@@ -90,30 +117,120 @@ function PrList({ signedIn }: { signedIn: boolean }) {
       {isLoading && <div className="text-zinc-500">Loading…</div>}
       {error && <div className="text-red-600 text-sm">{String((error as Error).message)}</div>}
 
-      <ul className="divide-y rounded border bg-white text-sm">
-        <li className="px-4 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 grid grid-cols-[1fr_8rem_4.5rem_4.5rem] gap-3 items-center">
-          <span>Pull request</span>
-          <span>State</span>
-          <span className="text-center" title="Quick tests">Quick</span>
-          <span className="text-center" title="Exhaustive tests">Exhaustive</span>
+      {data && (sortMode === "review-priority"
+        ? <PrListReviewPriority items={data.items} signedIn={signedIn} />
+        : <PrListFlat items={data.items} signedIn={signedIn} />)}
+    </div>
+  );
+}
+
+/** Header row used at the top of every PR list view, shared for column alignment. */
+function PrListHeader() {
+  return (
+    <li className="px-4 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 grid grid-cols-[1fr_8rem_4.5rem_4.5rem] gap-3 items-center">
+      <span>Pull request</span>
+      <span>State</span>
+      <span className="text-center" title="Quick tests">Quick</span>
+      <span className="text-center" title="Exhaustive tests">Exhaustive</span>
+    </li>
+  );
+}
+
+function PrRow({ p }: { p: PrSummary }) {
+  return (
+    <li className="px-4 py-3 hover:bg-zinc-50 grid grid-cols-[1fr_8rem_4.5rem_4.5rem] gap-3 items-center">
+      <a href={p.htmlUrl} target="_blank" rel="noreferrer" className="flex items-baseline gap-2 min-w-0">
+        <span className="text-zinc-900 font-medium truncate hover:underline">{p.title}</span>
+        <span className="text-zinc-500 text-xs whitespace-nowrap">#{p.number} by {p.authorLogin ?? "?"}</span>
+      </a>
+      <span><PrStateBadge pr={p} /></span>
+      <span className="flex justify-center"><TestStatusDot run={p.quickTest} label="Quick" /></span>
+      <span className="flex justify-center"><TestStatusDot run={p.exhaustiveTest} label="Exhaustive" /></span>
+    </li>
+  );
+}
+
+function PrListFlat({ items, signedIn }: { items: PrSummary[]; signedIn: boolean }) {
+  return (
+    <ul className="divide-y rounded border bg-white text-sm">
+      <PrListHeader />
+      {items.map((p) => <PrRow key={p.id} p={p} />)}
+      {items.length === 0 && (
+        <li className="px-4 py-6 text-zinc-500 text-sm">
+          No PRs yet. {signedIn ? "Hit “Manual refresh” to sync from GitHub." : "Sign in and hit “Manual refresh” to sync from GitHub."}
         </li>
-        {data?.items.map((p) => (
-          <li key={p.id} className="px-4 py-3 hover:bg-zinc-50 grid grid-cols-[1fr_8rem_4.5rem_4.5rem] gap-3 items-center">
-            <a href={p.htmlUrl} target="_blank" rel="noreferrer" className="flex items-baseline gap-2 min-w-0">
-              <span className="text-zinc-900 font-medium truncate hover:underline">{p.title}</span>
-              <span className="text-zinc-500 text-xs whitespace-nowrap">#{p.number} by {p.authorLogin ?? "?"}</span>
-            </a>
-            <span><PrStateBadge pr={p} /></span>
-            <span className="flex justify-center"><TestStatusDot run={p.quickTest} label="Quick" /></span>
-            <span className="flex justify-center"><TestStatusDot run={p.exhaustiveTest} label="Exhaustive" /></span>
-          </li>
-        ))}
-        {data && data.items.length === 0 && (
-          <li className="px-4 py-6 text-zinc-500 text-sm">
-            No PRs yet. {signedIn ? "Hit “Manual refresh” to sync from GitHub." : "Sign in and hit “Manual refresh” to sync from GitHub."}
-          </li>
-        )}
+      )}
+    </ul>
+  );
+}
+
+/**
+ * "Review priority" layout:
+ *   - "Ready for review" section at the top, grouped by (quick × exhaustive)
+ *     test status. The first group ("both passed") gets a highlighted box —
+ *     these are the PRs you can merge in CI terms.
+ *   - "Draft" section below a visual gap.
+ */
+function PrListReviewPriority({ items, signedIn }: { items: PrSummary[]; signedIn: boolean }) {
+  const { ready, drafts } = useMemo(() => groupForReviewPriority(items), [items]);
+
+  if (items.length === 0) {
+    return (
+      <ul className="divide-y rounded border bg-white text-sm">
+        <PrListHeader />
+        <li className="px-4 py-6 text-zinc-500 text-sm">
+          No PRs yet. {signedIn ? "Hit “Manual refresh” to sync from GitHub." : "Sign in and hit “Manual refresh” to sync from GitHub."}
+        </li>
       </ul>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <section>
+        <h2 className="text-xs uppercase tracking-wide text-zinc-500 font-semibold mb-2">Ready for review</h2>
+        {ready.length === 0
+          ? <div className="text-zinc-500 text-sm px-4 py-3 border rounded bg-white">Nothing here — all open PRs are drafts.</div>
+          : (
+            <div className="space-y-3">
+              {ready.map((g) => (
+                <div
+                  key={g.key}
+                  className={
+                    g.highlight
+                      ? "rounded-md border-2 border-green-500 bg-white shadow-sm"
+                      : "rounded border bg-white"
+                  }
+                >
+                  <div className={`px-4 py-1.5 text-xs font-medium uppercase tracking-wide ${
+                    g.highlight ? "text-green-700" : "text-zinc-500"
+                  }`}>
+                    {g.label}
+                    <span className="text-zinc-400 normal-case font-normal ml-2">
+                      ({g.items.length})
+                    </span>
+                  </div>
+                  <ul className="divide-y text-sm">
+                    <PrListHeader />
+                    {g.items.map((p) => <PrRow key={p.id} p={p} />)}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          )}
+      </section>
+
+      <section>
+        <h2 className="text-xs uppercase tracking-wide text-zinc-500 font-semibold mb-2">Draft</h2>
+        {drafts.length === 0
+          ? <div className="text-zinc-500 text-sm px-4 py-3 border rounded bg-white">No drafts.</div>
+          : (
+            <ul className="divide-y rounded border bg-white text-sm">
+              <PrListHeader />
+              {drafts.map((p) => <PrRow key={p.id} p={p} />)}
+            </ul>
+          )}
+      </section>
     </div>
   );
 }
