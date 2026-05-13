@@ -111,7 +111,38 @@ npm run db:apply:mirror:remote
 4. Run smoke tests.
 5. Apply to remote during low traffic.
 
-## CI/CD (GitHub Actions)
+## Tests
+
+`@cloudflare/vitest-pool-workers` runs each test file inside a real `workerd`
+runtime with the bindings from `wrangler.toml`. Migrations are applied to local
+D1 SQLite once per file via the setup file at `test/setup.ts`.
+
+```bash
+npm test            # one-shot
+npm run test:watch  # watch mode
+```
+
+Layout:
+
+```
+test/
+  setup.ts                       # applyD1Migrations() per file
+  env.d.ts                       # types for test-only bindings
+  helpers/
+    db.ts                        # resetDbs() — truncates in FK-safe order
+    session.ts                   # createSession() — fake user + session row
+    fixtures.ts                  # seedPr() etc.
+  integration/
+    auth.test.ts                 # private-mode invariants
+    webhook-sig.test.ts          # HMAC verifier
+    ...
+```
+
+Each test calls `worker.fetch(req, env, ctx)` directly — no HTTP server. Tests
+that need a logged-in user call `await createSession({ login: "alice" })` and
+pass the returned `cookie` header. Tests that need PR data call `seedPr(...)`.
+
+
 
 Four workflows live in `.github/workflows/`:
 

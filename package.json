@@ -14,6 +14,8 @@
     "build": "npm -w web run build",
     "deploy": "npm run build && wrangler deploy",
     "typecheck": "tsc -p tsconfig.json --noEmit && npm -w web run typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "db:generate:mirror": "drizzle-kit generate --config drizzle.config.mirror.ts",
     "db:generate:app": "drizzle-kit generate --config drizzle.config.app.ts",
     "db:apply:mirror:local": "wrangler d1 migrations apply githost-mirror --local",
@@ -26,10 +28,13 @@
     "db:export:app": "wrangler d1 export githost-app --remote --output backups/app-$(date -u +%Y%m%dT%H%M%SZ).sql"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.16.4",
     "@cloudflare/workers-types": "^4.20250501.0",
     "concurrently": "^8.2.2",
     "drizzle-kit": "^0.28.0",
+    "msw": "^2.14.6",
     "typescript": "^5.6.3",
+    "vitest": "^4.1.6",
     "wrangler": "^4.90.1"
   },
   "dependencies": {
