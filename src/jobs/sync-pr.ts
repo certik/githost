@@ -6,22 +6,18 @@ import { sql } from "drizzle-orm";
 
 /**
  * Fetch a single PR from GitHub and upsert it (idempotent).
- * We rely on GitHub's stable numeric `id` as the primary key.
+ * Uses an authenticated installation-token request so we get full rate limits
+ * (5000 req/hour per installation) and access to private repos.
  *
- * The installation id is read from a single-row config table or env. For this
- * scaffold we assume there's exactly one installation configured at deploy time
- * — production code should look it up per repo from the `installation` event.
+ * We rely on GitHub's stable numeric `id` as the primary key.
  */
 export async function syncPr(env: Env, _repoId: number, number: number): Promise<void> {
-  const installationId = Number(env.UPSTREAM_OWNER) || 0; // placeholder
-  // TODO: replace with a real lookup table once `installation` events are wired.
-  // For now this falls through to GitHub's anonymous fetch (works for public repos)
-  // if installationId is 0 by using a separate code path — kept simple here.
+  const installationId = parseInt(env.GITHUB_INSTALLATION_ID, 10);
 
-  const res = await fetch(
-    `https://api.github.com/repos/${env.UPSTREAM_OWNER}/${env.UPSTREAM_REPO}/pulls/${number}`,
-    { headers: { "User-Agent": "githost", Accept: "application/vnd.github+json" } },
-  );
+  const res = await gh(env, {
+    installationId,
+    path: `/repos/${env.UPSTREAM_OWNER}/${env.UPSTREAM_REPO}/pulls/${number}`,
+  });
   if (!res.ok) throw new Error(`fetch pr #${number}: ${res.status} ${await res.text()}`);
   const data = await res.json<any>();
 
@@ -87,7 +83,6 @@ export async function syncPr(env: Env, _repoId: number, number: number): Promise
     await db.insert(M.labelUpstream).values({ prId: data.id, name: l.name, color: l.color }).run();
   }
 
-  // NB: `_repoId` and `installationId` are reserved for when we wire up multi-repo
-  // and installation-token auth via gh(); kept here to keep the call sites stable.
-  void _repoId; void installationId; void gh;
+  // NB: `_repoId` is reserved for when we wire up multi-repo support.
+  void _repoId;
 }

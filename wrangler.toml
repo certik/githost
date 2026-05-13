@@ -56,4 +56,8 @@ crons = ["0 3 * * *"]
 [vars]
 UPSTREAM_OWNER = "lfortran"
 UPSTREAM_REPO  = "lfortran"
+# Single-installation setup: the GitHub App installation id on UPSTREAM_OWNER/REPO.
+# For multi-installation later, replace with a lookup table populated by the
+# `installation` / `installation_repositories` webhook events.
+GITHUB_INSTALLATION_ID = "131928789"
 

@@ -82,7 +82,7 @@ apiRoutes.get("/prs/:number/diff", async (c) => {
   }
 
   // TODO: pick installationId once known (see github-app installation flow).
-  const installationId = parseInt(c.req.header("x-githost-installation") ?? "0", 10);
+  const installationId = parseInt(c.env.GITHUB_INSTALLATION_ID, 10);
   const res = await gh(c.env, {
     installationId,
     path: `/repos/${c.env.UPSTREAM_OWNER}/${c.env.UPSTREAM_REPO}/pulls/${number}`,
@@ -106,14 +106,15 @@ apiRoutes.post("/refresh", async (c) => {
 
 // POST /api/branches  { name: "feature/x", from: "main" | "<sha>" }
 apiRoutes.post("/branches", async (c) => {
-  const body = await c.req.json<{ name: string; from: string; installationId: number }>();
+  const body = await c.req.json<{ name: string; from: string }>();
   if (!body?.name || !body?.from) return c.text("name and from required", 400);
+  const installationId = parseInt(c.env.GITHUB_INSTALLATION_ID, 10);
 
   // 1. Resolve `from` to a SHA.
   let sha = body.from;
   if (!/^[0-9a-f]{40}$/i.test(sha)) {
     const r = await gh(c.env, {
-      installationId: body.installationId,
+      installationId,
       path: `/repos/${c.env.UPSTREAM_OWNER}/${c.env.UPSTREAM_REPO}/git/ref/heads/${encodeURIComponent(body.from)}`,
     });
     if (!r.ok) return c.text(`resolve from: ${await r.text()}`, r.status as 400);
@@ -122,7 +123,7 @@ apiRoutes.post("/branches", async (c) => {
 
   // 2. Create the new ref.
   const r = await gh(c.env, {
-    installationId: body.installationId,
+    installationId,
     method: "POST",
     path: `/repos/${c.env.UPSTREAM_OWNER}/${c.env.UPSTREAM_REPO}/git/refs`,
     body: { ref: `refs/heads/${body.name}`, sha },
@@ -134,7 +135,8 @@ apiRoutes.post("/branches", async (c) => {
 // POST /api/prs/:number/post-review  { aiReviewId, event: "COMMENT" | "REQUEST_CHANGES" | "APPROVE" }
 apiRoutes.post("/prs/:number/post-review", async (c) => {
   const number = parseInt(c.req.param("number"), 10);
-  const body = await c.req.json<{ aiReviewId: string; event: "COMMENT" | "REQUEST_CHANGES" | "APPROVE"; installationId: number }>();
+  const body = await c.req.json<{ aiReviewId: string; event: "COMMENT" | "REQUEST_CHANGES" | "APPROVE" }>();
+  const installationId = parseInt(c.env.GITHUB_INSTALLATION_ID, 10);
 
   const adb = appDb(c.env.APP_DB);
   const review = await adb.select().from(A.aiReview).where(eq(A.aiReview.id, body.aiReviewId)).get();
@@ -143,7 +145,7 @@ apiRoutes.post("/prs/:number/post-review", async (c) => {
 
   const comments = review.commentsJson ? JSON.parse(review.commentsJson) as Array<{ path: string; line: number; body: string }> : [];
   const r = await gh(c.env, {
-    installationId: body.installationId,
+    installationId,
     method: "POST",
     path: `/repos/${c.env.UPSTREAM_OWNER}/${c.env.UPSTREAM_REPO}/pulls/${number}/reviews`,
     body: { commit_id: review.headSha, body: review.summary ?? "", event: body.event, comments },
