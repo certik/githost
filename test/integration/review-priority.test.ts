@@ -9,6 +9,7 @@ import {
   priorityOf,
   labelOf,
   bothPassing,
+  hasMergeConflict,
   groupForReviewPriority,
   type PrLike,
 } from "../../web/src/lib/review-priority";
@@ -21,6 +22,7 @@ function pr(opts: Partial<PrLike> & { quick?: string | null; exhaustive?: string
     id: opts.id ?? nextId++,
     draft: opts.draft ?? false,
     updatedAt: opts.updatedAt ?? 1_700_000_000_000,
+    mergeable: opts.mergeable,
     quickTest: quick === null ? null : { status: quick as PrLike["quickTest"] extends infer T ? T extends { status: infer S } ? S : never : never },
     exhaustiveTest: exhaustive === null ? null : { status: exhaustive as PrLike["exhaustiveTest"] extends infer T ? T extends { status: infer S } ? S : never : never },
   };
@@ -74,6 +76,51 @@ describe("bothPassing", () => {
   });
 });
 
+describe("hasMergeConflict / mergeable handling", () => {
+  it("is true ONLY when mergeable === false", () => {
+    expect(hasMergeConflict(pr({ mergeable: false }))).toBe(true);
+    expect(hasMergeConflict(pr({ mergeable: true }))).toBe(false);
+    expect(hasMergeConflict(pr({ mergeable: null }))).toBe(false);
+    expect(hasMergeConflict(pr({}))).toBe(false);  // undefined
+  });
+
+  it("Quick+Exhaustive passed + mergeable=false → bucket 6 (not 0)", () => {
+    expect(priorityOf(pr({ quick: "passed", exhaustive: "passed", mergeable: false }))).toBe(6);
+  });
+
+  it("Quick+Exhaustive passed + mergeable=true → bucket 0 (green)", () => {
+    expect(priorityOf(pr({ quick: "passed", exhaustive: "passed", mergeable: true }))).toBe(0);
+  });
+
+  it("Quick+Exhaustive passed + mergeable=null → bucket 0 (optimistic green during compute)", () => {
+    expect(priorityOf(pr({ quick: "passed", exhaustive: "passed", mergeable: null }))).toBe(0);
+  });
+
+  it("merge conflict does NOT affect priority when CI isn't both-green", () => {
+    // A PR that's quick=passed/exhaustive=queued stays in bucket 2 regardless
+    // of mergeable — conflict info is only relevant once CI is fully green.
+    expect(priorityOf(pr({ quick: "passed", exhaustive: "queued", mergeable: false }))).toBe(2);
+    expect(priorityOf(pr({ quick: "failed", mergeable: false }))).toBe(30);
+  });
+
+  it("groupForReviewPriority puts mergeable=false PRs in bucket 6 with warn=true", () => {
+    const green   = pr({ quick: "passed", exhaustive: "passed", mergeable: true });
+    const conflict = pr({ quick: "passed", exhaustive: "passed", mergeable: false });
+    const { ready } = groupForReviewPriority([green, conflict]);
+    expect(ready.map((g) => g.key)).toEqual([0, 6]);
+    expect(ready[0]?.highlight).toBe(true);
+    expect(ready[0]?.warn).toBe(false);
+    expect(ready[1]?.highlight).toBe(false);
+    expect(ready[1]?.warn).toBe(true);
+    expect(ready[0]?.items.map((p) => p.id)).toEqual([green.id]);
+    expect(ready[1]?.items.map((p) => p.id)).toEqual([conflict.id]);
+  });
+
+  it("labelOf(6) describes the merge-conflict case", () => {
+    expect(labelOf(6)).toBe("Quick + Exhaustive passed (merge conflict)");
+  });
+});
+
 describe("labelOf", () => {
   it("returns the expected label for each priority key", () => {
     expect(labelOf(0)).toBe("Quick + Exhaustive passed");
@@ -119,7 +166,9 @@ describe("groupForReviewPriority", () => {
     const { ready } = groupForReviewPriority([ci_green, partial]);
     expect(ready[0]?.key).toBe(0);
     expect(ready[0]?.highlight).toBe(true);
+    expect(ready[0]?.warn).toBe(false);
     expect(ready[1]?.highlight).toBe(false);
+    expect(ready[1]?.warn).toBe(false);
   });
 
   it("omits empty groups", () => {

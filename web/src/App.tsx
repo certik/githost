@@ -10,6 +10,10 @@ import Logs from "./Logs";
 type SortMode = "review-priority" | "newest";
 const SORT_MODE_KEY = "githost.sortMode";
 
+const MAX_BATCHES_KEY = "githost.maxBatches";
+const MAX_BATCHES_CHOICES = [5, 15, 50, 100, 200] as const;
+const MAX_BATCHES_DEFAULT = 15;
+
 export default function App() {
   const { data: me } = useQuery({ queryKey: ["me"], queryFn: () => api.me(), staleTime: 60_000 });
   const qc = useQueryClient();
@@ -72,13 +76,24 @@ function PrList({ signedIn }: { signedIn: boolean }) {
     try { localStorage.setItem(SORT_MODE_KEY, sortMode); } catch { /* ignore */ }
   }, [sortMode]);
 
+  const [maxBatches, setMaxBatches] = useState<number>(() => {
+    try {
+      const v = parseInt(localStorage.getItem(MAX_BATCHES_KEY) ?? "", 10);
+      if (MAX_BATCHES_CHOICES.includes(v as typeof MAX_BATCHES_CHOICES[number])) return v;
+    } catch { /* fall through */ }
+    return MAX_BATCHES_DEFAULT;
+  });
+  useEffect(() => {
+    try { localStorage.setItem(MAX_BATCHES_KEY, String(maxBatches)); } catch { /* ignore */ }
+  }, [maxBatches]);
+
   const qc = useQueryClient();
   const { data, isLoading, error } = useQuery({
     queryKey: ["prs", state],
     queryFn: () => api.prs(state === "all" ? undefined : state),
   });
   const refresh = useMutation({
-    mutationFn: () => api.refresh("prs"),
+    mutationFn: () => api.refresh("prs", { maxBatches }),
   });
 
   // Poll the DO status while the chain is running, then 5s of "settling"
@@ -145,6 +160,17 @@ function PrList({ signedIn }: { signedIn: boolean }) {
             <option value="open">Open</option>
             <option value="closed">Closed</option>
             <option value="all">All</option>
+          </select>
+          <select
+            className="border rounded px-2 py-1 text-sm"
+            value={maxBatches}
+            onChange={(e) => setMaxBatches(parseInt(e.target.value, 10))}
+            title="Max batches per refresh click (20 PRs per batch). Higher = catches up more drift but takes longer."
+            disabled={refresh.isPending || syncStatus.data?.status === "running"}
+          >
+            {MAX_BATCHES_CHOICES.map((n) => (
+              <option key={n} value={n}>{n} batches</option>
+            ))}
           </select>
           <button
             className="border rounded px-3 py-1 text-sm bg-white hover:bg-zinc-100 disabled:opacity-50"
@@ -247,18 +273,20 @@ function PrListReviewPriority({ items, signedIn }: { items: PrSummary[]; signedI
           ? <div className="text-zinc-500 text-sm px-4 py-3 border rounded bg-white">Nothing here — all open PRs are drafts.</div>
           : (
             <div className="space-y-3">
-              {ready.map((g) => (
-                <div
-                  key={g.key}
-                  className={
-                    g.highlight
-                      ? "rounded-md border-2 border-green-500 bg-white shadow-sm"
-                      : "rounded border bg-white"
-                  }
-                >
-                  <div className={`px-4 py-1.5 text-xs font-medium uppercase tracking-wide ${
-                    g.highlight ? "text-green-700" : "text-zinc-500"
-                  }`}>
+              {ready.map((g) => {
+                const boxClass = g.highlight
+                  ? "rounded-md border-2 border-green-500 bg-white shadow-sm"
+                  : g.warn
+                    ? "rounded-md border-2 border-amber-400 bg-white shadow-sm"
+                    : "rounded border bg-white";
+                const headerClass = g.highlight
+                  ? "text-green-700"
+                  : g.warn
+                    ? "text-amber-700"
+                    : "text-zinc-500";
+                return (
+                <div key={g.key} className={boxClass}>
+                  <div className={`px-4 py-1.5 text-xs font-medium uppercase tracking-wide ${headerClass}`}>
                     {g.label}
                     <span className="text-zinc-400 normal-case font-normal ml-2">
                       ({g.items.length})
@@ -269,7 +297,8 @@ function PrListReviewPriority({ items, signedIn }: { items: PrSummary[]; signedI
                     {g.items.map((p) => <PrRow key={p.id} p={p} />)}
                   </ul>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
       </section>
