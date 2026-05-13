@@ -138,14 +138,16 @@ function PrStateBadge({ pr }: { pr: PrSummary }) {
 }
 
 /**
- * GitHub-style status icons for the test buckets. Six visual states:
- *   - not queued (run === null) : empty gray ring (no checks ran yet)
- *   - queued                    : amber filled dot
- *   - running                   : amber dot with a clockwise-rotating arc
- *   - passed                    : green dot
- *   - failed                    : red circle with white "x"
- *   - skipped                   : gray ring with white center + gray "/"
- * Hovering shows the status + head_sha (when present).
+ * GitHub-style status icons for the test buckets.
+ *
+ * All icons render in a 16×16 (w-4 h-4) bounding box so the column lines up.
+ * The "primary circle" diameter is 16 px for every status that has an outer
+ * ring (not queued, running, passed, failed, skipped). Queued + the inner of
+ * running share a smaller 10 px amber dot: when a queued check transitions
+ * to running, only the outer ring appears — the inner dot stays the same
+ * size.
+ *
+ * Hovering shows status + head_sha (when present).
  */
 function TestStatusDot({ run, label }: { run: TestRun | null; label: string }) {
   const status: TestStatus | null = run?.status ?? null;
@@ -176,41 +178,43 @@ function TestStatusDot({ run, label }: { run: TestRun | null; label: string }) {
 }
 
 function NotQueuedIcon() {
-  return <span className="w-3 h-3 rounded-full border border-zinc-300" />;
+  // 16 px thin gray ring — same outer diameter as every other icon.
+  return <span className="w-4 h-4 rounded-full border border-zinc-300" />;
 }
 
 function QueuedIcon() {
-  return <span className="w-3 h-3 rounded-full bg-amber-400" />;
+  // Small 8 px amber dot, centered. Identical to the inner dot of
+  // RunningIcon so transition queued → running adds just the outer ring.
+  return <span className="inline-block rounded-full bg-amber-400" style={{ width: "8px", height: "8px" }} />;
 }
 
 /**
  * Layered "running" indicator:
- *   - inner amber-400 dot, same size as the other status dots (12 px)
- *   - amber-200 static track around it, with a visible gap to the inner dot
- *   - amber-400 spinning arc on top of the track (same color as the dot)
+ *   - 8 px amber-400 inner dot (matches QueuedIcon exactly)
+ *   - amber-200 static track at the 16 px outer edge
+ *   - amber-400 spinning arc on top of the track
  *
- * Everything is absolutely positioned in a 20×20 container so the dot and the
- * SVG ring share the exact same pixel center (flex centering can produce a
- * subpixel offset that makes the dot look drifted).
+ * Absolute positioning so the inner dot shares the SVG ring's exact pixel
+ * center (flex centering produces a subpixel offset).
  */
 function RunningIcon() {
   return (
-    <span className="relative inline-block w-5 h-5">
+    <span className="relative inline-block w-4 h-4">
       <span
         className="absolute rounded-full bg-amber-400"
-        style={{ width: "12px", height: "12px", left: "4px", top: "4px" }}
+        style={{ width: "8px", height: "8px", left: "4px", top: "4px" }}
       />
-      <svg className="absolute inset-0 w-5 h-5 block" viewBox="0 0 20 20" aria-hidden="true">
-        <circle cx="10" cy="10" r="9" fill="none" stroke="#fde68a" strokeWidth="2" />
+      <svg className="absolute inset-0 w-4 h-4 block" viewBox="0 0 16 16" aria-hidden="true">
+        <circle cx="8" cy="8" r="7" fill="none" stroke="#fde68a" strokeWidth="2" />
       </svg>
-      <svg className="absolute inset-0 w-5 h-5 block animate-spin" viewBox="0 0 20 20" aria-hidden="true">
+      <svg className="absolute inset-0 w-4 h-4 block animate-spin" viewBox="0 0 16 16" aria-hidden="true">
         <circle
-          cx="10" cy="10" r="9"
+          cx="8" cy="8" r="7"
           fill="none"
           stroke="#f59e0b"
           strokeWidth="2"
           strokeLinecap="round"
-          strokeDasharray="17 100"
+          strokeDasharray="13 100"
         />
       </svg>
     </span>
@@ -218,26 +222,46 @@ function RunningIcon() {
 }
 
 function PassedIcon() {
-  return <span className="w-3 h-3 rounded-full bg-green-500" />;
+  // 16 px green circle with white checkmark (GitHub style).
+  return (
+    <svg className="w-4 h-4 block" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="8" cy="8" r="8" fill="#22c55e" />
+      <path
+        d="M4.5 8.5 L7 11 L11.75 5.75"
+        fill="none"
+        stroke="white"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
 }
 
 function FailedIcon() {
+  // 16 px red circle with white X.
   return (
-    <svg className="w-4 h-4" viewBox="0 0 16 16" aria-hidden="true">
-      <circle cx="8" cy="8" r="7" fill="#ef4444" />
-      <path d="M5.5 5.5 L10.5 10.5 M10.5 5.5 L5.5 10.5"
-            stroke="white" strokeWidth="1.75" strokeLinecap="round" />
+    <svg className="w-4 h-4 block" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="8" cy="8" r="8" fill="#ef4444" />
+      <path
+        d="M5.5 5.5 L10.5 10.5 M10.5 5.5 L5.5 10.5"
+        stroke="white"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+      />
     </svg>
   );
 }
 
 function SkippedIcon() {
-  // Gray outer ring, white inner field, gray diagonal slash through the middle.
+  // 16 px gray ring, white inner field, gray diagonal slash through the middle.
+  // Ring thickness = outer r=8 minus inner r=6 → 2 px. Slash strokeWidth
+  // matches so the slash visually balances with the ring.
   return (
-    <svg className="w-4 h-4" viewBox="0 0 16 16" aria-hidden="true">
-      <circle cx="8" cy="8" r="7" fill="#9ca3af" />
-      <circle cx="8" cy="8" r="5" fill="white" />
-      <path d="M5 11 L11 5" stroke="#9ca3af" strokeWidth="1.5" strokeLinecap="round" />
+    <svg className="w-4 h-4 block" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="8" cy="8" r="8" fill="#9ca3af" />
+      <circle cx="8" cy="8" r="6" fill="white" />
+      <path d="M5 11 L11 5" stroke="#9ca3af" strokeWidth="2" strokeLinecap="round" />
     </svg>
   );
 }
