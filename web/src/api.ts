@@ -1,4 +1,4 @@
-export type TestStatus = "queued" | "running" | "passed" | "failed";
+export type TestStatus = "queued" | "running" | "passed" | "failed" | "skipped";
 
 export interface TestRun {
   status: TestStatus;

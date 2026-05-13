@@ -36,16 +36,18 @@ describe("aggregateChecks", () => {
     }
   });
 
-  it("treats skipped checks as 'not really run' — null if all are skipped", () => {
+  it("treats skipped checks as 'not really run' — all-skipped → status 'skipped' (NOT null)", () => {
     expect(aggregateChecks([
       run("a", "completed", "skipped"),
       run("b", "completed", "skipped"),
-    ])).toBeNull();
+    ])).toBe("skipped");
   });
 
-  it("ignores skipped checks when computing the bucket status", () => {
-    // The lfortran #11484 scenario: 8 skipped checks fell into the exhaustive
-    // bucket. Pre-fix the bucket aggregated to "passed"; now it must be null.
+  it("the lfortran #11484 fixture (8 skipped exhaustive checks) → 'skipped'", () => {
+    // Before this fix the aggregator returned 'passed' (wrong: green dot for
+    // checks that never ran). After the first fix it returned null (empty
+    // ring). The current behavior: 'skipped', so the UI shows a distinct
+    // gray-slash icon — clearer than an empty ring, which means "no checks".
     expect(aggregateChecks([
       run("Test LLVM ...",                "completed", "skipped"),
       run("build-and-push-image",         "completed", "skipped"),
@@ -55,18 +57,18 @@ describe("aggregateChecks", () => {
       run("Check Release build",          "completed", "skipped"),
       run("Test without LLVM Backend",    "completed", "skipped"),
       run("Test MLIR backend",            "completed", "skipped"),
-    ])).toBeNull();
+    ])).toBe("skipped");
   });
 
-  it("treats cancelled as 'not really run' (single cancelled → null)", () => {
-    expect(aggregateChecks([run("a", "completed", "cancelled")])).toBeNull();
+  it("a single cancelled check → 'skipped' (cancelled is in the not-really-run set)", () => {
+    expect(aggregateChecks([run("a", "completed", "cancelled")])).toBe("skipped");
   });
 
-  it("treats neutral and stale as 'not really run'", () => {
+  it("neutral and stale alone also map to 'skipped'", () => {
     expect(aggregateChecks([
       run("a", "completed", "neutral"),
       run("b", "completed", "stale"),
-    ])).toBeNull();
+    ])).toBe("skipped");
   });
 
   it("a single passing check next to skipped checks → passed", () => {
@@ -105,15 +107,13 @@ describe("aggregateChecks", () => {
     ])).toBe("running");
   });
 
-  it("treats cancelled / skipped / neutral / stale as not-really-run (filtered out)", () => {
-    // These conclusions don't make the bucket green. Together they should
-    // produce null (the bucket as a whole hasn't run).
+  it("treats cancelled / skipped / neutral / stale as not-really-run (→ 'skipped')", () => {
     expect(aggregateChecks([
       run("b", "completed", "cancelled"),
       run("c", "completed", "skipped"),
       run("d", "completed", "neutral"),
       run("e", "completed", "stale"),
-    ])).toBeNull();
+    ])).toBe("skipped");
     // But a single real success carries the bucket.
     expect(aggregateChecks([
       run("a", "completed", "success"),

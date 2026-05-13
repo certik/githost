@@ -100,7 +100,7 @@ apiRoutes.get("/prs", async (c) => {
 });
 
 interface TestRunOut {
-  status: "queued" | "running" | "passed" | "failed";
+  status: "queued" | "running" | "passed" | "failed" | "skipped";
   headSha: string | null;
   startedAt: number | null;
   finishedAt: number | null;
@@ -132,14 +132,14 @@ apiRoutes.put("/prs/:number/tests/:kind", async (c) => {
     return c.text("kind must be 'quick' or 'exhaustive'", 400);
   }
   const body = await c.req.json<{
-    status: "queued" | "running" | "passed" | "failed";
+    status: "queued" | "running" | "passed" | "failed" | "skipped";
     headSha?: string;
     logUrl?: string;
     startedAt?: number;
     finishedAt?: number;
   }>().catch(() => null);
-  if (!body || !["queued", "running", "passed", "failed"].includes(body.status)) {
-    return c.text("body.status must be one of queued|running|passed|failed", 400);
+  if (!body || !["queued", "running", "passed", "failed", "skipped"].includes(body.status)) {
+    return c.text("body.status must be one of queued|running|passed|failed|skipped", 400);
   }
 
   const mdb = mirrorDb(c.env.MIRROR_DB);
