@@ -1,4 +1,5 @@
 import type { Env } from "./lib/env";
+import { runJob } from "./jobs/consumer";
 
 /**
  * Cron triggers:
@@ -9,16 +10,12 @@ import type { Env } from "./lib/env";
  */
 export async function handleScheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
   if (event.cron === "0 3 * * *") {
-    ctx.waitUntil(nightlyResync(env));
+    runJob({ type: "sync.full", resource: "prs" }, env, ctx);
+    runJob({ type: "sync.full", resource: "issues" }, env, ctx);
+    runJob({ type: "sync.full", resource: "comments" }, env, ctx);
   } else if (event.cron === "30 3 * * *") {
     ctx.waitUntil(nightlyBackup(env));
   }
-}
-
-async function nightlyResync(env: Env): Promise<void> {
-  await env.JOBS.send({ type: "sync.full", resource: "prs" });
-  await env.JOBS.send({ type: "sync.full", resource: "issues" });
-  await env.JOBS.send({ type: "sync.full", resource: "comments" });
 }
 
 /**

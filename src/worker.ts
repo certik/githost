@@ -1,9 +1,8 @@
 import { Hono } from "hono";
-import type { Env, JobMessage } from "./lib/env";
+import type { Env } from "./lib/env";
 import { webhookRoutes } from "./routes/webhook";
 import { apiRoutes } from "./routes/api";
 import { authRoutes } from "./routes/auth";
-import { handleQueue } from "./jobs/consumer";
 import { handleScheduled } from "./scheduled";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -21,9 +20,6 @@ app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
 
 export default {
   fetch: app.fetch,
-  async queue(batch: MessageBatch<JobMessage>, env: Env): Promise<void> {
-    await handleQueue(batch, env);
-  },
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     await handleScheduled(event, env, ctx);
   },

@@ -47,8 +47,8 @@ npx wrangler login
 npx wrangler d1 create githost-mirror      # copy database_id into wrangler.toml
 npx wrangler d1 create githost-app         # copy database_id into wrangler.toml
 npx wrangler r2 bucket create githost-blobs
-npx wrangler queues create githost-jobs
-npx wrangler queues create githost-jobs-dlq
+#    NOTE: Cloudflare Queues require the Workers Paid plan. On the Free plan we
+#    use `ctx.waitUntil()` for async work instead — no extra resources to create.
 
 # 4. apply migrations (locally and to production)
 npm run db:apply:local

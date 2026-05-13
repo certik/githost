@@ -11,9 +11,6 @@ export interface Env {
   // R2 bucket for cached diffs + nightly DB exports
   BLOBS: R2Bucket;
 
-  // Queue producer binding (the consumer is wired via wrangler.toml -> exported `queue` handler)
-  JOBS: Queue<JobMessage>;
-
   // Static assets (the React SPA built into web/dist)
   ASSETS: Fetcher;
 
@@ -35,6 +32,11 @@ export interface Env {
 /**
  * Discriminated union of every kind of background job. Adding a new job type =
  * extend this union and add a handler in src/jobs/consumer.ts.
+ *
+ * NOTE: On the Workers Free plan we don't have Queues, so jobs run via
+ * `ctx.waitUntil(dispatch(msg, env, ctx))` in the same Worker invocation that
+ * produced them. The discriminated-union/dispatch pattern is preserved so we
+ * can move to real Queues later by switching the producer site only.
  */
 export type JobMessage =
   | { type: "github.webhook"; event: string; deliveryId: string; payload: unknown }

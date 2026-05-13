@@ -1,12 +1,13 @@
 import { Hono } from "hono";
 import type { Env, JobMessage } from "../lib/env";
 import { verifyGithubSignature } from "../lib/verify-webhook";
+import { runJob } from "../jobs/consumer";
 
 /**
  * Receives GitHub App webhooks. Pattern:
  *   1. Read the raw body (need it for HMAC).
  *   2. Verify X-Hub-Signature-256.
- *   3. Enqueue the event for async processing and return 200 immediately.
+ *   3. Kick off async processing via ctx.waitUntil and return 200 immediately.
  *      GitHub disables webhooks that consistently take >10s — never do real work here.
  */
 export const webhookRoutes = new Hono<{ Bindings: Env }>();
@@ -28,7 +29,7 @@ webhookRoutes.post("/github", async (c) => {
   }
 
   const msg: JobMessage = { type: "github.webhook", event, deliveryId, payload };
-  await c.env.JOBS.send(msg);
+  runJob(msg, c.env, c.executionCtx);
 
   return c.json({ ok: true, deliveryId });
 });

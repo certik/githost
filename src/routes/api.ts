@@ -6,6 +6,7 @@ import * as M from "../db/mirror/schema";
 import { appDb } from "../db/app";
 import * as A from "../db/app/schema";
 import { gh } from "../lib/github-app";
+import { runJob } from "../jobs/consumer";
 
 /**
  * Public-ish JSON API consumed by the React SPA. Auth gating is intentionally
@@ -98,7 +99,7 @@ apiRoutes.post("/refresh", async (c) => {
   type Body = { resource?: "prs" | "issues" | "comments" };
   const body: Body = await c.req.json<Body>().catch(() => ({} as Body));
   const resource = body.resource ?? "prs";
-  await c.env.JOBS.send({ type: "sync.full", resource });
+  runJob({ type: "sync.full", resource }, c.env, c.executionCtx);
   return c.json({ ok: true, queued: resource });
 });
 

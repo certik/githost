@@ -31,17 +31,11 @@ migrations_dir = "migrations/app"
 binding = "BLOBS"
 bucket_name = "githost-blobs"
 
-# Async job pipeline (webhook fan-out, AI reviews, full resync).
-[[queues.producers]]
-binding = "JOBS"
-queue = "githost-jobs"
-
-[[queues.consumers]]
-queue = "githost-jobs"
-max_batch_size = 10
-max_batch_timeout = 5
-max_retries = 5
-dead_letter_queue = "githost-jobs-dlq"
+# NOTE: Workers Free plan does not include Queues. We use `ctx.waitUntil()` for
+# async work instead — the webhook handler returns 200 immediately and continues
+# processing in the background. To switch to Queues later, restore the
+# `[[queues.producers]]` / `[[queues.consumers]]` stanzas, set `JOBS` in Env,
+# and replace `runJob(msg, env, ctx)` calls with `env.JOBS.send(msg)`.
 
 # Cron triggers (UTC).
 #  - 03:00 daily: delta resync sweep to repair drift from missed webhooks.
@@ -60,6 +54,7 @@ crons = ["0 3 * * *", "30 3 * * *"]
 
 # Plain vars (non-secret config).
 [vars]
-UPSTREAM_OWNER = "REPLACE_ME"
-UPSTREAM_REPO  = "REPLACE_ME"
+UPSTREAM_OWNER = "lfortran"
+UPSTREAM_REPO  = "lfortran"
 BACKUP_RETENTION_DAYS = "30"
+
