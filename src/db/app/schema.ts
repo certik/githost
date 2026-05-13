@@ -123,3 +123,18 @@ export const prTestRun = sqliteTable("pr_test_run", {
   pk: primaryKey({ columns: [t.prId, t.kind] }),
   statusIdx: index("pr_test_run_status_idx").on(t.status),
 }));
+
+/**
+ * Maps upstream GitHub check-run names to our quick/exhaustive buckets.
+ * See migrations/app/0003_check_kind_map.sql for the seeded defaults.
+ */
+export const checkKindMap = sqliteTable("check_kind_map", {
+  id: text("id").primaryKey(),
+  pattern: text("pattern").notNull(),
+  kind: text("kind").notNull(),                             // "quick" | "exhaustive"
+  matchType: text("match_type").notNull().default("exact"), // "exact" | "glob"
+  priority: integer("priority").notNull().default(0),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+}, (t) => ({
+  kindIdx: index("check_kind_map_kind_idx").on(t.kind),
+}));
