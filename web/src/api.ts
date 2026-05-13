@@ -29,16 +29,28 @@ export interface AiReview {
   createdAt: number;
 }
 
+export interface Me {
+  user: { id: string; ghUserId: number; login: string } | null;
+}
+
+export class ApiError extends Error {
+  constructor(public status: number, public bodyText: string) {
+    super(`HTTP ${status}: ${bodyText}`);
+  }
+}
+
 async function j<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(path, { credentials: "include", ...init });
-  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  if (!r.ok) throw new ApiError(r.status, await r.text());
   return r.json() as Promise<T>;
 }
 
 export const api = {
+  me: () => j<Me>(`/api/me`),
   prs: (state?: string) => j<{ items: PrSummary[] }>(`/api/prs${state ? `?state=${state}` : ""}`),
   pr: (n: number) => j<PrDetailResponse>(`/api/prs/${n}`),
   diff: (n: number) => fetch(`/api/prs/${n}/diff`, { credentials: "include" }).then(r => r.text()),
   refresh: (resource: "prs" | "issues" | "comments" = "prs") =>
     j<{ ok: true }>(`/api/refresh`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ resource }) }),
+  logout: () => fetch(`/auth/logout`, { method: "POST", credentials: "include" }),
 };

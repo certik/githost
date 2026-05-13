@@ -7,12 +7,32 @@ import { appDb } from "../db/app";
 import * as A from "../db/app/schema";
 import { gh } from "../lib/github-app";
 import { runJob } from "../jobs/consumer";
+import { currentUser, loadSession, requireSession } from "../lib/auth";
+import { appUpdate } from "../lib/audit";
 
 /**
- * Public-ish JSON API consumed by the React SPA. Auth gating is intentionally
- * minimal here — wire up real session checks before exposing publicly.
+ * Public-ish JSON API consumed by the React SPA.
+ *
+ * Auth policy:
+ *   - GET endpoints (PR list/detail/diff) are anonymous-readable; that's by
+ *     design — this is a read-mostly view of a public repo.
+ *   - Mutations and anything that calls GitHub on our installation's behalf
+/**
+ * Public-ish JSON API consumed by the React SPA.
+ *
+ * Auth policy:
+ *   - GET endpoints (PR list/detail/diff) are anonymous-readable; that's by
+ *     design — this is a read-mostly view of a public repo.
+ *   - Mutations and anything that calls GitHub on our installation's behalf
+ *     require a session (`requireSession`).
  */
 export const apiRoutes = new Hono<{ Bindings: Env }>();
+
+// GET /api/me — who am I? (or null)
+apiRoutes.get("/me", async (c) => {
+  const user = await loadSession(c);
+  return c.json({ user });
+});
 
 // GET /api/prs?state=open&limit=50&offset=0
 apiRoutes.get("/prs", async (c) => {
@@ -96,7 +116,7 @@ apiRoutes.get("/prs/:number/diff", async (c) => {
 });
 
 // POST /api/refresh  { resource: "prs" | "issues" | "comments" }  → enqueue full resync
-apiRoutes.post("/refresh", async (c) => {
+apiRoutes.post("/refresh", requireSession, async (c) => {
   type Body = { resource?: "prs" | "issues" | "comments" };
   const body: Body = await c.req.json<Body>().catch(() => ({} as Body));
   const resource = body.resource ?? "prs";
@@ -105,7 +125,7 @@ apiRoutes.post("/refresh", async (c) => {
 });
 
 // POST /api/branches  { name: "feature/x", from: "main" | "<sha>" }
-apiRoutes.post("/branches", async (c) => {
+apiRoutes.post("/branches", requireSession, async (c) => {
   const body = await c.req.json<{ name: string; from: string }>();
   if (!body?.name || !body?.from) return c.text("name and from required", 400);
   const installationId = parseInt(c.env.GITHUB_INSTALLATION_ID, 10);
@@ -133,10 +153,11 @@ apiRoutes.post("/branches", async (c) => {
 });
 
 // POST /api/prs/:number/post-review  { aiReviewId, event: "COMMENT" | "REQUEST_CHANGES" | "APPROVE" }
-apiRoutes.post("/prs/:number/post-review", async (c) => {
+apiRoutes.post("/prs/:number/post-review", requireSession, async (c) => {
   const number = parseInt(c.req.param("number"), 10);
   const body = await c.req.json<{ aiReviewId: string; event: "COMMENT" | "REQUEST_CHANGES" | "APPROVE" }>();
   const installationId = parseInt(c.env.GITHUB_INSTALLATION_ID, 10);
+  const user = currentUser(c);
 
   const adb = appDb(c.env.APP_DB);
   const review = await adb.select().from(A.aiReview).where(eq(A.aiReview.id, body.aiReviewId)).get();
@@ -153,10 +174,15 @@ apiRoutes.post("/prs/:number/post-review", async (c) => {
   if (!r.ok) return c.text(await r.text(), r.status as 400);
 
   const data = await r.json<{ id: number }>();
-  await adb.update(A.aiReview)
-    .set({ status: "posted", postedUpstreamAt: new Date(), upstreamReviewId: data.id, updatedAt: new Date() })
-    .where(eq(A.aiReview.id, body.aiReviewId))
-    .run();
+  await appUpdate(
+    adb,
+    A.aiReview,
+    "ai_review",
+    A.aiReview.id,
+    body.aiReviewId,
+    { status: "posted", postedUpstreamAt: new Date(), upstreamReviewId: data.id, updatedAt: new Date() },
+    user.id,
+  );
 
   return c.json({ ok: true, upstreamReviewId: data.id });
 });

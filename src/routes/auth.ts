@@ -4,6 +4,7 @@ import type { Env } from "../lib/env";
 import { appDb } from "../db/app";
 import * as A from "../db/app/schema";
 import { encryptString, randomId } from "../lib/crypto";
+import { SESSION_COOKIE, sessionCookie } from "../lib/auth";
 
 /**
  * GitHub OAuth (user auth) flow.
@@ -18,8 +19,8 @@ import { encryptString, randomId } from "../lib/crypto";
  */
 export const authRoutes = new Hono<{ Bindings: Env }>();
 
-const SESSION_COOKIE = "gh_session";
 const STATE_COOKIE = "gh_oauth_state";
+const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 
 authRoutes.get("/login", (c) => {
   const state = randomId(16);
@@ -33,7 +34,10 @@ authRoutes.get("/login", (c) => {
   url.searchParams.set("state", state);
   url.searchParams.set("scope", "read:user");
 
-  c.header("Set-Cookie", cookie(STATE_COOKIE, state, { maxAge: 600, httpOnly: true, secure: true, sameSite: "Lax", path: "/" }));
+  c.header(
+    "Set-Cookie",
+    `${STATE_COOKIE}=${state}; Max-Age=600; Path=/; HttpOnly; Secure; SameSite=Lax`,
+  );
   return c.redirect(url.toString(), 302);
 });
 
@@ -83,16 +87,14 @@ authRoutes.get("/callback", async (c) => {
     .run();
 
   const sessionId = randomId(32);
-  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  const expiresAt = new Date(Date.now() + SESSION_TTL_SECONDS * 1000);
   await adb.insert(A.userSession).values({
     id: sessionId, userId, expiresAt, createdAt: now,
     userAgent: c.req.header("user-agent") ?? null,
   }).run();
 
-  c.header("Set-Cookie", cookie(SESSION_COOKIE, sessionId, {
-    maxAge: 30 * 24 * 60 * 60, httpOnly: true, secure: true, sameSite: "Lax", path: "/",
-  }));
-  c.header("Set-Cookie", cookie(STATE_COOKIE, "", { maxAge: 0, path: "/" }), { append: true });
+  c.header("Set-Cookie", sessionCookie(sessionId, SESSION_TTL_SECONDS));
+  c.header("Set-Cookie", `${STATE_COOKIE}=; Max-Age=0; Path=/`, { append: true });
   return c.redirect("/", 302);
 });
 
@@ -102,23 +104,9 @@ authRoutes.post("/logout", async (c) => {
     const adb = appDb(c.env.APP_DB);
     await adb.delete(A.userSession).where(eq(A.userSession.id, sid)).run();
   }
-  c.header("Set-Cookie", cookie(SESSION_COOKIE, "", { maxAge: 0, path: "/" }));
+  c.header("Set-Cookie", sessionCookie("", 0));
   return c.json({ ok: true });
 });
-
-// --- cookie helpers ---
-
-function cookie(name: string, value: string, opts: {
-  maxAge?: number; httpOnly?: boolean; secure?: boolean; sameSite?: "Lax" | "Strict" | "None"; path?: string;
-}): string {
-  const parts = [`${name}=${value}`];
-  if (opts.maxAge !== undefined) parts.push(`Max-Age=${opts.maxAge}`);
-  if (opts.path) parts.push(`Path=${opts.path}`);
-  if (opts.httpOnly) parts.push("HttpOnly");
-  if (opts.secure) parts.push("Secure");
-  if (opts.sameSite) parts.push(`SameSite=${opts.sameSite}`);
-  return parts.join("; ");
-}
 
 function readCookie(header: string | undefined, name: string): string | undefined {
   if (!header) return undefined;

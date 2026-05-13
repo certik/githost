@@ -1,5 +1,6 @@
 import type { Env, JobMessage } from "../lib/env";
 import { syncPr } from "./sync-pr";
+import { syncIssue } from "./sync-issue";
 import { fullResync } from "./full-resync";
 import { runAiReview } from "./ai-review";
 
@@ -36,8 +37,7 @@ export async function dispatch(msg: JobMessage, env: Env, ctx: ExecutionContext)
     case "sync.pr":
       return syncPr(env, msg.repoId, msg.number);
     case "sync.issue":
-      // Same idea as syncPr; not implemented in this scaffold.
-      return;
+      return syncIssue(env, msg.repoId, msg.number);
     case "sync.full":
       return fullResync(env, msg.resource, ctx);
     case "ai.review":
