@@ -47,13 +47,38 @@ webhookRoutes.post("/github", async (c) => {
     return c.text("invalid json", 400);
   }
 
-  // Defensive repo filter. The App may be installed on multiple repos (e.g.
-  // certik/githost for self-CI), but we only mirror env.UPSTREAM_OWNER/REPO.
-  // Ignoring foreign events prevents accidental cross-repo data corruption
-  // (syncPr always fetches from UPSTREAM, so a foreign-repo PR number would
-  // hit the wrong row in our mirror).
+  // Defensive repo + installation filter. The App may be installed on multiple
+  // accounts/repos (we make it public so we can install on lfortran/lfortran);
+  // we only mirror env.UPSTREAM_OWNER/REPO via env.GITHUB_INSTALLATION_ID.
+  // Ignoring foreign events prevents:
+  //  1. cross-repo data corruption (syncPr always fetches from UPSTREAM, so
+  //     a foreign-repo PR number would write the wrong row in our mirror)
+  //  2. resource burn from a stranger installing the App and pointing
+  //     thousands of webhooks at our Worker.
+  //
+  // Two-layer check (belt and suspenders):
+  //  - installation_id mismatch → reject. Strongest signal: the App settings
+  //    pin a specific installation in env.GITHUB_INSTALLATION_ID, so any
+  //    other installation is by definition not ours.
+  //  - repository.full_name mismatch → reject. Catches the case where the
+  //    same installation also has access to other repos in the same org
+  //    (e.g. lfortran/lfortran AND lfortran/lpython); we mirror only one.
   const repoFullName = payload?.repository?.full_name ?? null;
   const expectedRepo = `${c.env.UPSTREAM_OWNER}/${c.env.UPSTREAM_REPO}`;
+  const expectedInstallationId = parseInt(c.env.GITHUB_INSTALLATION_ID, 10);
+  const eventInstallationId = payload?.installation?.id ?? null;
+
+  if (eventInstallationId !== null && eventInstallationId !== expectedInstallationId) {
+    await syncLog(c.env, "warn", "webhook.ignored-foreign-installation",
+      `ignoring event=${event} from installation=${eventInstallationId} (expected ${expectedInstallationId})`, {
+        event, deliveryId,
+        installationId: eventInstallationId,
+        expected: expectedInstallationId,
+        repo: repoFullName,
+      });
+    return c.json({ ok: true, ignored: "foreign-installation", installationId: eventInstallationId });
+  }
+
   if (repoFullName && repoFullName !== expectedRepo) {
     await syncLog(c.env, "info", "webhook.ignored-foreign-repo",
       `ignoring event=${event} from repo=${repoFullName} (expected ${expectedRepo})`, {

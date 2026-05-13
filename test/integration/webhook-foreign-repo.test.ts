@@ -49,6 +49,30 @@ async function postWebhook(event: string, payload: unknown): Promise<Response> {
 }
 
 describe("POST /webhook/github — foreign-repo filter", () => {
+  it("ignores events from a different installation_id and logs them as ignored", async () => {
+    // env.GITHUB_INSTALLATION_ID = "1" in tests; send an event from id 9999.
+    const res = await postWebhook("pull_request", {
+      action: "closed",
+      number: 99,
+      installation: { id: 9999 },
+      repository: { id: 1, full_name: `${env.UPSTREAM_OWNER}/${env.UPSTREAM_REPO}` },
+      pull_request: { number: 99, state: "closed", merged: true },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json<{ ok: boolean; ignored?: string; installationId?: number }>();
+    expect(body.ignored).toBe("foreign-installation");
+    expect(body.installationId).toBe(9999);
+
+    const log = await env.APP_DB.prepare(
+      "SELECT event, level FROM sync_log ORDER BY ts DESC LIMIT 1"
+    ).first<{ event: string; level: string }>();
+    expect(log?.event).toBe("webhook.ignored-foreign-installation");
+    expect(log?.level).toBe("warn");
+
+    const pr = await env.MIRROR_DB.prepare("SELECT * FROM pr WHERE number = 99").first();
+    expect(pr).toBeNull();
+  });
+
   it("ignores events from a repo other than UPSTREAM_OWNER/REPO and logs them as ignored", async () => {
     // env.UPSTREAM_OWNER = "testorg", UPSTREAM_REPO = "testrepo" in tests.
     const res = await postWebhook("pull_request", {
@@ -99,6 +123,7 @@ describe("POST /webhook/github — foreign-repo filter", () => {
     const res = await postWebhook("pull_request", {
       action: "opened",
       number: 100,
+      installation: { id: 1 },
       repository: { id: 1, full_name: `${env.UPSTREAM_OWNER}/${env.UPSTREAM_REPO}` },
       pull_request: { number: 100, state: "open", merged: false },
     });
