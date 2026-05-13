@@ -61,3 +61,45 @@ UPSTREAM_REPO  = "lfortran"
 # `installation` / `installation_repositories` webhook events.
 GITHUB_INSTALLATION_ID = "131928789"
 
+# ============================================================================
+# Preview environment — shared by all PR previews. Deployed to a separate Worker
+# named `githost-preview`, with its own staging D1s and KV. No cron triggers
+# (don't contend with prod). Webhooks still point at prod; previews use manual
+# refresh from the UI to populate data.
+# ============================================================================
+[env.preview]
+name = "githost-preview"
+
+[env.preview.assets]
+directory = "./web/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+[[env.preview.d1_databases]]
+binding = "MIRROR_DB"
+database_name = "githost-mirror-staging"
+database_id = "64e9e11c-35f1-40de-b51c-19a7375a67db"
+migrations_dir = "migrations/mirror"
+
+[[env.preview.d1_databases]]
+binding = "APP_DB"
+database_name = "githost-app-staging"
+database_id = "ff41577f-5112-449e-b005-2d4f93eb9d78"
+migrations_dir = "migrations/app"
+
+[[env.preview.kv_namespaces]]
+binding = "DIFF_CACHE"
+id = "6052b8d7481841cb9200d9398b352eaa"
+
+[env.preview.vars]
+UPSTREAM_OWNER = "lfortran"
+UPSTREAM_REPO  = "lfortran"
+GITHUB_INSTALLATION_ID = "131928789"
+
+# Disable cron triggers on preview — don't contend with prod's nightly resync.
+# (Triggers do NOT inherit from the top-level config; we still need to be explicit
+# even though our intent is "no triggers".)
+[env.preview.triggers]
+crons = []
+
+

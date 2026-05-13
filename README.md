@@ -111,12 +111,45 @@ npm run db:apply:mirror:remote
 4. Run smoke tests.
 5. Apply to remote during low traffic.
 
-## Adding a new job type
+## CI/CD (GitHub Actions)
 
-1. Extend the `JobMessage` union in `src/lib/env.ts`.
-2. Add a handler module under `src/jobs/`.
-3. Wire it into `dispatch()` in `src/jobs/consumer.ts`.
-4. Producers call `env.JOBS.send({ type: "...", ... })`.
+Four workflows live in `.github/workflows/`:
+
+| File | Trigger | What it does |
+|---|---|---|
+| `ci.yml` | every push & PR | typecheck Worker, typecheck + build SPA, `wrangler deploy --dry-run` |
+| `deploy.yml` | push to `main`, manual | snapshot D1 Time Travel bookmarks → apply prod migrations → `wrangler deploy` |
+| `preview.yml` | PR open / push / reopen | apply staging migrations → `wrangler versions upload --env preview` → sticky PR comment with the preview URL |
+| `backup.yml` | nightly at 04:00 UTC, manual | `wrangler d1 export --remote` for both DBs → upload as 90-day workflow artifact |
+
+### Required GitHub repo secrets
+
+```bash
+gh secret set CLOUDFLARE_API_TOKEN   # create at https://dash.cloudflare.com/profile/api-tokens
+                                     # using the "Edit Cloudflare Workers" template
+gh secret set CLOUDFLARE_ACCOUNT_ID --body <your-account-id>
+```
+
+### Preview architecture
+
+- Prod Worker: `githost` (this `wrangler.toml`)
+- Preview Worker: `githost-preview` (from `[env.preview]`)
+- Each gets its own D1 pair + KV namespace. Staging D1s are shared across all
+  open PRs — it's test data, not "your fork's branch of prod".
+- Preview Worker has **no cron triggers**; webhooks still point at prod.
+- Per-PR preview URLs come from `wrangler versions upload --env preview` — each
+  PR push generates a new versioned URL, posted as a sticky comment.
+- Cloudflare retains the most recent versions automatically; old preview
+  versions become unreachable after a few generations (no cleanup needed).
+
+### Rollback playbook
+
+1. Find the bookmark in the failed deploy's Actions summary
+   ("Pre-migration Time Travel bookmarks").
+2. `npx wrangler d1 time-travel restore githost-mirror --bookmark <id>`
+   (and/or the same for `githost-app`).
+3. `gh workflow run deploy.yml --ref <previous-good-sha>` to redeploy the prior
+   code, OR `npx wrangler rollback` for an instant code-only rollback.
 
 ## Where to go from here
 

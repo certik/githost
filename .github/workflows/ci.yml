@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  typecheck-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - run: npm ci
+
+      - name: Type-check Worker
+        run: npx tsc -p tsconfig.json --noEmit
+
+      - name: Type-check + build web
+        run: npm -w web run build
+
+      - name: Bundle Worker (dry-run, validates wrangler.toml)
+        run: npx wrangler deploy --dry-run --outdir .wrangler/tmp

@@ -1,0 +1,54 @@
+name: backup
+
+on:
+  schedule:
+    # Daily at 04:00 UTC (1 hour after the prod resync cron at 03:00 UTC, so the
+    # export captures the freshly-synced state).
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export-prod:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - run: npm ci
+
+      - name: Prepare output dir
+        run: mkdir -p backups
+
+      # `wrangler d1 export --remote` produces a SQL dump (schema + data) that
+      # can be restored verbatim with `wrangler d1 execute <db> --file`.
+      - name: Export githost-mirror
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          ts=$(date -u +%Y%m%dT%H%M%SZ)
+          npx wrangler d1 export githost-mirror --remote --output "backups/mirror-$ts.sql"
+
+      - name: Export githost-app
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          ts=$(date -u +%Y%m%dT%H%M%SZ)
+          npx wrangler d1 export githost-app --remote --output "backups/app-$ts.sql"
+
+      - name: Upload backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: d1-backup-${{ github.run_id }}
+          path: backups/*.sql
+          # GitHub Actions free tier keeps artifacts for 90 days. For longer
+          # retention, push to a release or another store.
+          retention-days: 90
