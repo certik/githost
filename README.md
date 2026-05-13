@@ -8,7 +8,8 @@ Local "GitHub clone" that mirrors an upstream repo:
 - Create branches in the upstream repo from the UI.
 
 Single Cloudflare Worker with Static Assets serves both the React SPA (`web/`)
-and the API (`src/`).
+and the API (`src/`). Designed for the **Workers Free plan** — no Queues, no R2,
+no payment method required.
 
 ## Layout
 
@@ -46,9 +47,11 @@ npm install
 npx wrangler login
 npx wrangler d1 create githost-mirror      # copy database_id into wrangler.toml
 npx wrangler d1 create githost-app         # copy database_id into wrangler.toml
-npx wrangler r2 bucket create githost-blobs
+npx wrangler kv namespace create DIFF_CACHE  # copy id into wrangler.toml
 #    NOTE: Cloudflare Queues require the Workers Paid plan. On the Free plan we
 #    use `ctx.waitUntil()` for async work instead — no extra resources to create.
+#    Backups are handled by a GitHub Actions workflow (see CI section below),
+#    not by the Worker — so no R2 bucket is required either.
 
 # 4. apply migrations (locally and to production)
 npm run db:apply:local
@@ -95,9 +98,9 @@ npm run db:apply:mirror:remote
   npx wrangler d1 time-travel info     githost-app
   npx wrangler d1 time-travel restore  githost-app --timestamp 2026-05-12T22:00:00Z
   ```
-- **Offsite:** nightly cron in `src/scheduled.ts` dumps both DBs as NDJSON to
-  `R2://githost-blobs/backups/{mirror,app}/<timestamp>.jsonl`, prunes older than
-  `BACKUP_RETENTION_DAYS` (default 30).
+- **Offsite (via CI):** a scheduled GitHub Actions workflow runs `wrangler d1 export`
+  nightly and uploads SQL dumps as workflow artifacts (90-day retention, free).
+  See `.github/workflows/backup.yml` (added in the CI phase).
 - **Manual export:** `npm run db:export:mirror` / `npm run db:export:app` (SQL dump to `./backups/`).
 
 ## Pre-prod-migration checklist

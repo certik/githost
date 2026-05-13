@@ -8,8 +8,8 @@ export interface Env {
   MIRROR_DB: D1Database;
   APP_DB: D1Database;
 
-  // R2 bucket for cached diffs + nightly DB exports
-  BLOBS: R2Bucket;
+  // KV namespace for cached PR diffs (small, bounded)
+  DIFF_CACHE: KVNamespace;
 
   // Static assets (the React SPA built into web/dist)
   ASSETS: Fetcher;
@@ -17,7 +17,6 @@ export interface Env {
   // Plain vars
   UPSTREAM_OWNER: string;
   UPSTREAM_REPO: string;
-  BACKUP_RETENTION_DAYS: string;
 
   // Secrets (set via `wrangler secret put` or .dev.vars locally)
   GITHUB_APP_ID: string;

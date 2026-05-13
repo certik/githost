@@ -14,22 +14,20 @@ not_found_handling = "single-page-application"
 [[d1_databases]]
 binding = "MIRROR_DB"
 database_name = "githost-mirror"
-# Replace with the real id from `npx wrangler d1 create githost-mirror`.
-database_id = "00000000-0000-0000-0000-00000000aaaa"
+database_id = "32d625ab-f627-4fca-bf4e-b6087fa777ea"
 migrations_dir = "migrations/mirror"
 
 # Irreplaceable local data (AI reviews, local labels, saved views, audit, sessions).
 [[d1_databases]]
 binding = "APP_DB"
 database_name = "githost-app"
-# Replace with the real id from `npx wrangler d1 create githost-app`.
-database_id = "00000000-0000-0000-0000-00000000bbbb"
+database_id = "bdaf81d2-0ada-46ac-a6fd-579818f5ccb5"
 migrations_dir = "migrations/app"
 
-# Cached diffs/patches and nightly DB exports.
-[[r2_buckets]]
-binding = "BLOBS"
-bucket_name = "githost-blobs"
+# Cached PR diffs (small, bounded by upstream PR count).
+[[kv_namespaces]]
+binding = "DIFF_CACHE"
+id = "babcea2ca8374157bc1405e26c3fb25a"
 
 # NOTE: Workers Free plan does not include Queues. We use `ctx.waitUntil()` for
 # async work instead — the webhook handler returns 200 immediately and continues
@@ -39,9 +37,11 @@ bucket_name = "githost-blobs"
 
 # Cron triggers (UTC).
 #  - 03:00 daily: delta resync sweep to repair drift from missed webhooks.
-#  - 03:30 daily: export both D1 databases to R2 (retain N days, see scheduled.ts).
+# Backups: performed by GitHub Actions (wrangler d1 export → GH artifact),
+# not by the Worker. This avoids needing R2 (and any payment method) on the
+# Workers Free plan.
 [triggers]
-crons = ["0 3 * * *", "30 3 * * *"]
+crons = ["0 3 * * *"]
 
 # Secrets (set via `wrangler secret put NAME`):
 #   GITHUB_APP_ID
@@ -56,5 +56,4 @@ crons = ["0 3 * * *", "30 3 * * *"]
 [vars]
 UPSTREAM_OWNER = "lfortran"
 UPSTREAM_REPO  = "lfortran"
-BACKUP_RETENTION_DAYS = "30"
 

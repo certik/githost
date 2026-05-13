@@ -67,7 +67,7 @@ apiRoutes.get("/prs/:number", async (c) => {
   return c.json({ pr: row, reviews, localLabels });
 });
 
-// GET /api/prs/:number/diff — cached in R2 keyed by base..head SHA.
+// GET /api/prs/:number/diff — cached in KV keyed by base..head SHA.
 apiRoutes.get("/prs/:number/diff", async (c) => {
   const number = parseInt(c.req.param("number"), 10);
   const db = mirrorDb(c.env.MIRROR_DB);
@@ -75,10 +75,10 @@ apiRoutes.get("/prs/:number/diff", async (c) => {
   if (!row) return c.notFound();
   if (!row.baseSha || !row.headSha) return c.text("diff unavailable: missing SHAs", 409);
 
-  const key = `diffs/${c.env.UPSTREAM_OWNER}/${c.env.UPSTREAM_REPO}/${row.baseSha}..${row.headSha}.diff`;
-  const cached = await c.env.BLOBS.get(key);
-  if (cached) {
-    return new Response(cached.body, { headers: { "content-type": "text/plain; charset=utf-8" } });
+  const key = `${c.env.UPSTREAM_OWNER}/${c.env.UPSTREAM_REPO}/${row.baseSha}..${row.headSha}`;
+  const cached = await c.env.DIFF_CACHE.get(key);
+  if (cached !== null) {
+    return new Response(cached, { headers: { "content-type": "text/plain; charset=utf-8" } });
   }
 
   // TODO: pick installationId once known (see github-app installation flow).
@@ -90,7 +90,8 @@ apiRoutes.get("/prs/:number/diff", async (c) => {
   });
   if (!res.ok) return c.text(await res.text(), res.status as 400);
   const text = await res.text();
-  c.executionCtx.waitUntil(c.env.BLOBS.put(key, text, { httpMetadata: { contentType: "text/plain" } }));
+  // KV entries default to no expiration; cap at 30 days so abandoned PR caches don't pile up.
+  c.executionCtx.waitUntil(c.env.DIFF_CACHE.put(key, text, { expirationTtl: 30 * 24 * 60 * 60 }));
   return new Response(text, { headers: { "content-type": "text/plain; charset=utf-8" } });
 });
 
