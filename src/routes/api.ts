@@ -20,19 +20,22 @@ import { appUpdate } from "../lib/audit";
 /**
  * Public-ish JSON API consumed by the React SPA.
  *
- * Auth policy:
- *   - GET endpoints (PR list/detail/diff) are anonymous-readable; that's by
- *     design — this is a read-mostly view of a public repo.
- *   - Mutations and anything that calls GitHub on our installation's behalf
- *     require a session (`requireSession`).
+ * Auth policy (private mode):
+ *   - GET /api/me is anonymous-readable so the SPA can render a sign-in state.
+ *   - Everything else requires a session (`requireSession`). This is enforced
+ *     via a wildcard middleware below; individual handlers don't repeat it.
  */
 export const apiRoutes = new Hono<{ Bindings: Env }>();
 
-// GET /api/me — who am I? (or null)
+// GET /api/me — who am I? (or null). Stays anonymous so the unauthenticated
+// SPA can still render its header.
 apiRoutes.get("/me", async (c) => {
   const user = await loadSession(c);
   return c.json({ user });
 });
+
+// Everything registered below this line requires a session.
+apiRoutes.use("*", requireSession);
 
 // GET /api/prs?state=open&limit=50&offset=0
 apiRoutes.get("/prs", async (c) => {

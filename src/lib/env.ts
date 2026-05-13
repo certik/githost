@@ -18,6 +18,7 @@ export interface Env {
   UPSTREAM_OWNER: string;
   UPSTREAM_REPO: string;
   GITHUB_INSTALLATION_ID: string;
+  ALLOWED_GITHUB_LOGINS: string;
 
   // Secrets (set via `wrangler secret put` or .dev.vars locally)
   GITHUB_APP_ID: string;

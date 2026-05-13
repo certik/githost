@@ -68,6 +68,28 @@ authRoutes.get("/callback", async (c) => {
   if (!meRes.ok) return c.text("github /user failed", 502);
   const me = await meRes.json<{ id: number; login: string }>();
 
+  // Allowlist check — only permit logins enumerated in ALLOWED_GITHUB_LOGINS.
+  // Empty/missing var means "no one"; an explicit "*" means "anyone" (not
+  // recommended for production).
+  const allowed = (c.env.ALLOWED_GITHUB_LOGINS ?? "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  const isAllowed = allowed.includes("*") || allowed.includes(me.login.toLowerCase());
+  if (!isAllowed) {
+    return c.html(
+      `<!doctype html>
+<html><head><meta charset="utf-8"><title>Access denied</title></head>
+<body style="font-family: system-ui, sans-serif; padding: 2rem; max-width: 600px; margin: auto; color: #111;">
+  <h1 style="color: #b91c1c;">Access denied</h1>
+  <p>Your GitHub account <strong>@${me.login}</strong> is not authorized to use this instance.</p>
+  <p>If you think this is a mistake, contact the administrator and ask them to add your login to <code>ALLOWED_GITHUB_LOGINS</code>.</p>
+  <p><a href="https://github.com/settings/applications">Revoke this app's access to your GitHub account</a></p>
+</body></html>`,
+      403,
+    );
+  }
+
   // Upsert user, store token encrypted, create session.
   const adb = appDb(c.env.APP_DB);
   const now = new Date();

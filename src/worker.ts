@@ -4,6 +4,7 @@ import { webhookRoutes } from "./routes/webhook";
 import { apiRoutes } from "./routes/api";
 import { authRoutes } from "./routes/auth";
 import { handleScheduled } from "./scheduled";
+import { loadSession } from "./lib/auth";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -13,10 +14,32 @@ app.route("/webhook", webhookRoutes);
 app.route("/api", apiRoutes);
 app.route("/auth", authRoutes);
 
-// SPA fallback: any non-API route that doesn't match a static asset gets index.html.
-// (With `not_found_handling = "single-page-application"` in wrangler.toml, the Assets
-// binding handles client-side routes by serving index.html.)
-app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
+/**
+ * Catch-all: serve the SPA's static assets. Private-mode gate lives here.
+ *
+ * Behavior:
+ *   - Anything under /auth/* or /healthz is exempt (the login flow itself must
+ *     be reachable to an unauthenticated user). These are handled by their
+ *     own routes above; reaching the catch-all means they didn't match.
+ *   - For any other path, require a valid session. If missing:
+ *       * HTML / document navigations  → 302 to /auth/login
+ *       * Everything else (XHR/fetch, asset requests) → 401 JSON
+ *   - With `run_worker_first = true` set in wrangler.toml the Worker runs for
+ *     every request, so this gate covers the SPA's HTML AND its JS/CSS assets.
+ *     That's intentional: we don't want unauthenticated users to even see the
+ *     SPA's source/structure.
+ */
+app.all("*", async (c) => {
+  const user = await loadSession(c);
+  if (!user) {
+    const accept = c.req.header("accept") ?? "";
+    const dest = c.req.header("sec-fetch-dest") ?? "";
+    const isDocumentNav = dest === "document" || accept.includes("text/html");
+    if (isDocumentNav) return c.redirect("/auth/login", 302);
+    return c.json({ error: "authentication required" }, 401);
+  }
+  return c.env.ASSETS.fetch(c.req.raw);
+});
 
 export default {
   fetch: app.fetch,
