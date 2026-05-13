@@ -29,15 +29,10 @@ export interface Env {
   SESSION_SECRET: string;
   TOKEN_ENCRYPTION_KEY: string;
 
-  // Shared secret used to authenticate the server's self-fetch chain
-  // (POST /api/internal/sync-batch). Set via `wrangler secret put
-  // WORKER_INTERNAL_SECRET`. Random opaque string, never sent to clients.
-  WORKER_INTERNAL_SECRET: string;
-
-  // Service binding pointing at ourselves. Used by the resync chain to
-  // spawn follow-up batch invocations without going through public routing
-  // (which would 404 due to CF's anti-loop protection). See wrangler.toml.
-  SELF: Fetcher;
+  // Durable Object namespace for the SyncChain singleton. Used by /api/refresh
+  // to kick off the alarm-driven resync chain. See
+  // src/durable-objects/sync-chain.ts for why a DO (vs Worker self-fetch).
+  SYNC_CHAIN: DurableObjectNamespace;
 
   // Local-dev only — when set to "true", GET /auth/dev-login creates a session
   // and signs you in as the user named in the `login` query param (default

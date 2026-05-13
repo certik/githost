@@ -79,8 +79,26 @@ function PrList({ signedIn }: { signedIn: boolean }) {
   });
   const refresh = useMutation({
     mutationFn: () => api.refresh("prs"),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["prs"] }),
   });
+
+  // Poll the DO status while the chain is running, then 5s of "settling"
+  // after it finishes so the PR list query refetches and the user sees the
+  // newly-synced state. The DO returns { status: "idle" } when done.
+  const refreshTriggered = refresh.isPending || refresh.isSuccess;
+  const syncStatus = useQuery({
+    queryKey: ["refresh-status"],
+    queryFn: () => api.refreshStatus(),
+    enabled: refreshTriggered,
+    refetchInterval: (q) => q.state.data?.status === "running" ? 1500 : false,
+  });
+
+  // When the chain transitions to idle, invalidate the PR query so the new
+  // data shows up.
+  useEffect(() => {
+    if (syncStatus.data?.status === "idle" && refreshTriggered) {
+      qc.invalidateQueries({ queryKey: ["prs"] });
+    }
+  }, [syncStatus.data?.status, refreshTriggered, qc]);
 
   const refreshError = refresh.error instanceof ApiError && refresh.error.status === 401
     ? "Sign in to refresh from GitHub."
@@ -88,20 +106,26 @@ function PrList({ signedIn }: { signedIn: boolean }) {
       ? (refresh.error as Error).message
       : null;
 
-  // Format the refresh result for the user. The chain keeps running on the
-  // server after we get this first-batch response, so we tell the user that
-  // more catch-up is in flight if hasMore is true.
-  const refreshSummary = refresh.data
-    ? (() => {
-        const r = refresh.data;
-        if (typeof r.processed !== "number") return null;
-        const parts = [`synced ${r.processed}`];
-        if (r.skipped) parts.push(`${r.skipped} up to date`);
-        if (r.failed) parts.push(`${r.failed} failed`);
-        const tail = r.hasMore ? " — chain still running in background" : "";
-        return parts.join(", ") + tail;
-      })()
-    : null;
+  // Build a status banner from the DO status. While running: show progress.
+  // When idle, show the last completion if recent.
+  const refreshBanner = (() => {
+    if (!refreshTriggered) return null;
+    const s = syncStatus.data;
+    if (!s) {
+      // mutation succeeded but first status fetch hasn't returned yet
+      return refresh.data?.alreadyRunning ? "A sync is already running." : "Sync starting…";
+    }
+    if (s.status === "running") {
+      return `Syncing… page ${s.page}, ${s.batches} batches, ${s.processed} PRs synced.`;
+    }
+    if (s.status === "stopped" && s.lastError) {
+      return `Sync stopped: ${s.lastError}`;
+    }
+    if (s.status === "idle" && s.finishedAt) {
+      return `Sync complete: ${s.batches} batches, ${s.processed} PRs synced.`;
+    }
+    return null;
+  })();
 
   return (
     <div className="max-w-5xl mx-auto">
@@ -132,10 +156,16 @@ function PrList({ signedIn }: { signedIn: boolean }) {
       </div>
 
       {refreshError && <div className="mb-3 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">{refreshError}</div>}
-      {refreshSummary && !refreshError && (
-        <div className="mb-3 text-sm text-emerald-800 bg-emerald-50 border border-emerald-200 rounded px-3 py-2 flex items-center justify-between">
-          <span>{refreshSummary}</span>
-          <Link to="/logs" className="text-xs underline text-emerald-700 hover:text-emerald-900">view sync log</Link>
+      {refreshBanner && !refreshError && (
+        <div className={`mb-3 text-sm rounded px-3 py-2 flex items-center justify-between border ${
+          syncStatus.data?.status === "running"
+            ? "text-blue-800 bg-blue-50 border-blue-200"
+            : syncStatus.data?.status === "stopped"
+              ? "text-red-800 bg-red-50 border-red-200"
+              : "text-emerald-800 bg-emerald-50 border-emerald-200"
+        }`}>
+          <span>{refreshBanner}</span>
+          <Link to="/logs" className="text-xs underline opacity-75 hover:opacity-100">view sync log</Link>
         </div>
       )}
       {isLoading && <div className="text-zinc-500">Loading…</div>}

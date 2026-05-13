@@ -73,20 +73,14 @@ export default defineConfig(async () => {
             UPSTREAM_OWNER: "testorg",
             UPSTREAM_REPO: "testrepo",
             GITHUB_INSTALLATION_ID: "1",
-            // Used by /api/internal/sync-batch auth. Tests pass this value
-            // explicitly in the X-Internal-Secret header to exercise the
-            // authenticated path.
-            WORKER_INTERNAL_SECRET: "test-internal-secret",
             // Force off by default. The tests for /auth/dev-login that need
             // it enabled pass an env override into worker.fetch directly.
             DEV_LOGIN_ENABLED: "",
           },
-          // Service binding to ourselves, used by spawnChainLink() in
-          // src/routes/api.ts. In tests we never exercise chain spawning
-          // (ctx.waitUntil is a no-op in our test helper), so we provide
-          // a stub fetcher that no-ops.
-          serviceBindings: {
-            SELF: () => new Response("test stub: chain spawn not exercised in tests", { status: 200 }),
+          // SyncChain DO binding for refresh tests. Miniflare auto-discovers
+          // the class via the script entry, so we just declare the namespace.
+          durableObjects: {
+            SYNC_CHAIN: { className: "SyncChain" },
           },
         },
       }),

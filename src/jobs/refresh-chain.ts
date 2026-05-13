@@ -7,28 +7,27 @@ import { syncPr } from "./sync-pr";
 import { syncLog } from "../lib/sync-log";
 
 /**
- * Server-driven resync that walks the upstream PR list one page at a time and
- * only re-fetches PRs whose `updated_at` on GitHub is newer than what we have
- * in the mirror DB. Each call to `refreshPrsBatch` processes exactly one
- * page and returns whether further work is needed; the caller (the internal
- * /api/internal/sync-batch endpoint) is responsible for spawning the next
- * link in the chain via `ctx.waitUntil(fetch(selfUrl))`.
+ * One batch of the resync chain. Walks one page of GitHub's PR list, syncs
+ * only the items whose `updated_at` is newer than what we have in the mirror
+ * DB, and reports how much remains via `hasMore`.
  *
- * Why batch-per-invocation instead of looping in one Worker invocation?
- *   - Workers Free gives 30s wall-clock and 50 subrequests per request.
+ * The CALLER is responsible for advancing the chain (e.g. the SyncChain
+ * Durable Object schedules another alarm if `hasMore` is true). This module
+ * is intentionally side-effect-free w.r.t. the chain's next step — it just
+ * processes one page and returns.
+ *
+ * Why batches:
+ *   - Workers Free gives 30s wall-clock and 50 subrequests per invocation.
  *   - Each syncPr makes 2 subrequests (PR detail + check-runs).
  *   - 1 list fetch + up to 20 syncs = 41 subrequests = fits comfortably.
- *   - Spawning the next link via self-fetch creates a fresh invocation with a
- *     fresh budget, so the chain can run as long as it needs to.
  *
- * Watermark optimization: if every item on this page is already current in
- * the mirror, all older items are too (the list is `sort=updated&desc`), so
- * we return `hasMore: false` and the chain terminates without paging further.
+ * Watermark optimization: if every item on a page is already current, all
+ * older items are too (the list is sorted updated_at DESC), so we return
+ * `hasMore: false` and the caller terminates without paging further.
  */
 
 export const REFRESH_PER_PAGE = 50;
 export const MAX_SYNCS_PER_BATCH = 20;
-export const MAX_CHAIN_DEPTH = 25;          // 25 * 50 = 1250 PRs covered per chain
 
 export interface BatchResult {
   page: number;
@@ -36,7 +35,7 @@ export interface BatchResult {
   processed: number;   // PRs we actually re-fetched + upserted
   skipped: number;     // PRs that were already current in the mirror
   failed: number;      // syncPr() throws that we caught (logged)
-  hasMore: boolean;    // true iff caller should schedule next page
+  hasMore: boolean;    // true iff caller should run another batch
   reason: string;      // why we stopped (for the log)
 }
 
@@ -134,17 +133,4 @@ export async function refreshPrsBatch(env: Env, page: number): Promise<BatchResu
   }
 
   return { page, scanned: items.length, processed, skipped, failed, hasMore, reason };
-}
-
-/**
- * Build the URL the chain self-fetches to advance one link. We honor the
- * current request's origin so this works in dev (localhost), preview, and
- * prod without env config.
- *
- * If a batch returned `hasMore: true` with reason "page-not-drained", we
- * re-run the same page; otherwise advance.
- */
-export function nextChainUrl(origin: string, result: BatchResult, chainDepth: number): string {
-  const next = result.reason === "page-not-drained" ? result.page : result.page + 1;
-  return `${origin}/api/internal/sync-batch?page=${next}&chain=${chainDepth + 1}`;
 }

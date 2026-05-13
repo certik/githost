@@ -40,15 +40,21 @@ migrations_dir = "migrations/app"
 binding = "DIFF_CACHE"
 id = "babcea2ca8374157bc1405e26c3fb25a"
 
-# Service binding to ourselves, used by the server-side resync chain to spawn
-# follow-up batch invocations. We can't use plain `fetch(selfUrl)` because
-# Cloudflare blocks Worker→same-Worker public URL calls to prevent infinite
-# loops; that path hits Static Assets and 404s. A self-service-binding
-# triggers our own Worker handler with a fresh wall-clock + subrequest
-# budget. See src/routes/api.ts spawnChainLink().
-[[services]]
-binding = "SELF"
-service = "githost"
+# Durable Object used by /api/refresh to drive the resync chain via alarms.
+# Why a DO and not Worker→Worker self-fetch: Cloudflare caps recursive Worker
+# call depth at ~10 nested service-binding calls, so self-fetch chaining
+# topped out at ~200 PRs per refresh click. DO alarm() invocations are
+# independent (no parent, no stack), so the chain runs as long as it needs.
+[[durable_objects.bindings]]
+name = "SYNC_CHAIN"
+class_name = "SyncChain"
+
+# SQLite-backed DOs (vs the original KV-backed) are free on Workers Free.
+# `new_sqlite_classes` opts a NEW class into the SQLite backend; classes
+# created with `new_classes` use the older KV backend and require Paid.
+[[migrations]]
+tag = "v1-sync-chain"
+new_sqlite_classes = ["SyncChain"]
 
 # NOTE: Workers Free plan does not include Queues. We use `ctx.waitUntil()` for
 # async work instead — the webhook handler returns 200 immediately and continues

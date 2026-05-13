@@ -210,7 +210,7 @@ describe("refreshPrsBatch", () => {
 });
 
 // ---------------------------------------------------------------------------
-// /api/internal/sync-batch endpoint
+// /api/refresh — kicks off the SyncChain DO
 // ---------------------------------------------------------------------------
 
 async function workerFetch(path: string, init?: RequestInit): Promise<Response> {
@@ -219,30 +219,35 @@ async function workerFetch(path: string, init?: RequestInit): Promise<Response> 
   return worker.fetch(new Request(`https://example.com${path}`, init), env, ctx);
 }
 
-describe("POST /api/internal/sync-batch", () => {
-  it("rejects with 403 when the secret is missing", async () => {
-    const res = await workerFetch("/api/internal/sync-batch?page=1", { method: "POST" });
-    expect(res.status).toBe(403);
+async function makeSessionCookie(login: string, ghUserId: number): Promise<string> {
+  const userId = crypto.randomUUID();
+  const sessionId = `s-${crypto.randomUUID()}`;
+  const now = Date.now();
+  await env.APP_DB.prepare("INSERT INTO app_user (id, gh_user_id, login, created_at) VALUES (?, ?, ?, ?)")
+    .bind(userId, ghUserId, login, now).run();
+  await env.APP_DB.prepare("INSERT INTO user_session (id, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)")
+    .bind(sessionId, userId, now + 60_000, now).run();
+  return `gh_session=${sessionId}`;
+}
+
+describe("POST /api/refresh", () => {
+  it("requires a session", async () => {
+    const res = await workerFetch("/api/refresh", { method: "POST" });
+    expect(res.status).toBe(401);
   });
 
-  it("rejects with 403 when the secret is wrong", async () => {
-    const res = await workerFetch("/api/internal/sync-batch?page=1", {
-      method: "POST", headers: { "x-internal-secret": "nope" },
-    });
-    expect(res.status).toBe(403);
-  });
-
-  it("accepts a valid secret and runs the batch", async () => {
-    installTokenHandler();
-    installListHandler([]);  // empty list, so no detail calls
-    const res = await workerFetch("/api/internal/sync-batch?page=1", {
+  it("returns {scheduled: true} when starting a chain via the DO", async () => {
+    const cookie = await makeSessionCookie("alice", 1001);
+    const res = await workerFetch("/api/refresh", {
       method: "POST",
-      headers: { "x-internal-secret": env.WORKER_INTERNAL_SECRET, "content-type": "application/json" },
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ resource: "prs" }),
     });
     expect(res.status).toBe(200);
-    const body = await res.json<{ ok: boolean; hasMore: boolean }>();
+    const body = await res.json<{ ok: boolean; scheduled?: boolean; alreadyRunning?: boolean }>();
     expect(body.ok).toBe(true);
-    expect(body.hasMore).toBe(false);
+    // Either it scheduled a new chain or one's already running — both are valid.
+    expect(body.scheduled === true || body.alreadyRunning === true).toBe(true);
   });
 });
 

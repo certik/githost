@@ -7,7 +7,7 @@ import { appDb } from "../db/app";
 import * as A from "../db/app/schema";
 import { gh } from "../lib/github-app";
 import { runJob } from "../jobs/consumer";
-import { refreshPrsBatch, nextChainUrl, MAX_CHAIN_DEPTH } from "../jobs/refresh-chain";
+import { getSyncChainStub } from "../durable-objects/sync-chain";
 import { syncLog } from "../lib/sync-log";
 import { currentUser, loadSession, requireSession } from "../lib/auth";
 import { appUpdate } from "../lib/audit";
@@ -34,58 +34,6 @@ export const apiRoutes = new Hono<{ Bindings: Env }>();
 apiRoutes.get("/me", async (c) => {
   const user = await loadSession(c);
   return c.json({ user });
-});
-
-// POST /api/internal/sync-batch?page=N&chain=K
-//
-// Internal endpoint that processes one page of the resync chain. Auth'd
-// purely by a shared secret in the X-Internal-Secret header — never callable
-// from a browser. The previous link (or POST /api/refresh) self-fetches this
-// URL via ctx.waitUntil(fetch(...)). Each call runs in a brand-new Worker
-// invocation with a fresh wall-clock + subrequest budget.
-//
-// Registered BEFORE the requireSession middleware below because it doesn't
-// have a session cookie — the chain is server-to-server.
-apiRoutes.post("/internal/sync-batch", async (c) => {
-  const secret = c.req.header("x-internal-secret");
-  if (!secret || secret !== c.env.WORKER_INTERNAL_SECRET) {
-    await syncLog(c.env, "warn", "sync.internal.unauthorized", "rejected /api/internal/sync-batch (bad secret)", {
-      ip: c.req.header("cf-connecting-ip") ?? null,
-    });
-    return c.text("forbidden", 403);
-  }
-  const page = Math.max(1, parseInt(c.req.query("page") ?? "1", 10) || 1);
-  const chain = Math.max(0, parseInt(c.req.query("chain") ?? "0", 10) || 0);
-
-  if (chain > MAX_CHAIN_DEPTH) {
-    await syncLog(c.env, "warn", "sync.chain.stopped",
-      `chain depth ${chain} exceeded MAX_CHAIN_DEPTH=${MAX_CHAIN_DEPTH}; stopping`, { page, chain });
-    return c.json({ ok: true, stopped: "max-chain-depth" });
-  }
-
-  let result;
-  try {
-    result = await refreshPrsBatch(c.env, page);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    await syncLog(c.env, "error", "sync.batch.error", `page ${page}: ${message}`, {
-      page, chain, stack: err instanceof Error ? err.stack : undefined,
-    });
-    return c.json({ ok: false, error: message }, 500);
-  }
-
-  await syncLog(c.env, result.failed > 0 ? "warn" : "info", "sync.batch.done",
-    `page=${page} chain=${chain} scanned=${result.scanned} processed=${result.processed} skipped=${result.skipped} failed=${result.failed} reason=${result.reason}`,
-    { ...result, chain },
-  );
-
-  if (result.hasMore) {
-    const origin = new URL(c.req.url).origin;
-    const next = nextChainUrl(origin, result, chain);
-    c.executionCtx.waitUntil(spawnChainLink(c.env, next, chain));
-  }
-
-  return c.json({ ok: true, ...result, chain });
 });
 
 // Everything registered below this line requires a session.
@@ -278,14 +226,14 @@ apiRoutes.get("/prs/:number/diff", async (c) => {
 
 // POST /api/refresh  { resource?: "prs" | "issues" | "comments" }
 //
-// Kicks off the server-side resync chain. The first batch is awaited inline
-// so the caller's response reflects "the most-recently-updated PRs are now
-// synced" before we return. If the first batch reports `hasMore`, we schedule
-// the next link in the chain via `ctx.waitUntil(fetch(internalUrl))` — a new
-// Worker invocation with its own 30s + 50-subreq budget. The chain keeps
-// itself going until it hits the watermark or end-of-list.
+// Kicks off the resync chain via the SyncChain Durable Object. The DO runs
+// one batch at a time via setAlarm(), so the chain can process arbitrarily
+// many PRs without hitting CF's Worker→Worker call-depth cap (~10).
 //
-// Only `resource: "prs"` is wired up so far; "issues" / "comments" fall back
+// Returns immediately. The actual sync runs in the background as the DO
+// fires its alarms. Progress is visible at /api/logs (and in the /logs UI).
+//
+// Only `resource: "prs"` uses the DO chain; "issues" / "comments" fall back
 // to the legacy fire-and-forget runJob path (to be migrated next).
 apiRoutes.post("/refresh", requireSession, async (c) => {
   type Body = { resource?: "prs" | "issues" | "comments" };
@@ -301,29 +249,26 @@ apiRoutes.post("/refresh", requireSession, async (c) => {
     actor: currentUser(c).login,
   });
 
-  const result = await refreshPrsBatch(c.env, 1);
-  await syncLog(c.env, result.failed > 0 ? "warn" : "info", "sync.batch.done",
-    `page=1 scanned=${result.scanned} processed=${result.processed} skipped=${result.skipped} failed=${result.failed} reason=${result.reason}`,
-    { ...result } as Record<string, unknown>,
-  );
-
-  if (result.hasMore) {
-    const origin = new URL(c.req.url).origin;
-    const next = nextChainUrl(origin, result, 1);
-    c.executionCtx.waitUntil(spawnChainLink(c.env, next, 1));
-  }
-
-  return c.json({
-    ok: true,
-    page: result.page,
-    processed: result.processed,
-    skipped: result.skipped,
-    failed: result.failed,
-    hasMore: result.hasMore,
-  });
+  const stub = getSyncChainStub(c.env);
+  const r = await stub.fetch("https://do/start", { method: "POST" });
+  const data = await r.json<{ ok: boolean; alreadyRunning?: boolean; scheduled?: boolean; page?: number; batches?: number }>();
+  return c.json(data);
 });
 
-// POST /api/internal/sync-batch is defined above (anonymous, secret-auth'd).
+// GET /api/refresh/status — current state of the resync chain DO. Lets the
+// UI poll progress while the chain runs.
+apiRoutes.get("/refresh/status", async (c) => {
+  const stub = getSyncChainStub(c.env);
+  const r = await stub.fetch("https://do/status");
+  return new Response(r.body, { status: r.status, headers: { "content-type": "application/json" } });
+});
+
+// POST /api/refresh/reset — admin escape hatch to clear stuck DO state.
+apiRoutes.post("/refresh/reset", async (c) => {
+  const stub = getSyncChainStub(c.env);
+  const r = await stub.fetch("https://do/reset", { method: "POST" });
+  return new Response(r.body, { status: r.status, headers: { "content-type": "application/json" } });
+});
 
 // GET /api/logs?limit=200&level=error&event=sync.pr.error
 // Returns recent sync_log rows, newest first. Allowlist-gated by requireSession.
@@ -357,39 +302,6 @@ apiRoutes.get("/logs", async (c) => {
 
 function safeParseJson(s: string): unknown {
   try { return JSON.parse(s); } catch { return s; }
-}
-
-/**
- * Fire the next link of the chain via our `SELF` service binding. Using a
- * service binding (not plain `fetch(publicUrl)`) is required because CF
- * blocks Worker→same-Worker public URL calls to prevent infinite loops;
- * those return 404 because the request lands on Static Assets instead of
- * the Worker handler. `env.SELF.fetch(url, init)` re-enters our own Worker
- * with a fresh wall-clock + subrequest budget.
- *
- * We `await r.arrayBuffer()` to drain the response — without this, the
- * connection may be torn down before the receiver finishes processing.
- */
-async function spawnChainLink(env: Env, url: string, fromChainDepth: number): Promise<void> {
-  try {
-    const r = await env.SELF.fetch(url, {
-      method: "POST",
-      headers: {
-        "x-internal-secret": env.WORKER_INTERNAL_SECRET,
-        "content-type": "application/json",
-      },
-      body: "{}",
-    });
-    await r.arrayBuffer();
-    if (!r.ok) {
-      await syncLog(env, "error", "sync.chain.spawn-failed",
-        `next link returned ${r.status}`, { url, fromChainDepth, status: r.status });
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    await syncLog(env, "error", "sync.chain.spawn-failed",
-      `self-fetch threw: ${message}`, { url, fromChainDepth });
-  }
 }
 
 // POST /api/branches  { name: "feature/x", from: "main" | "<sha>" }

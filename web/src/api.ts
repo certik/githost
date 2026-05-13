@@ -61,12 +61,21 @@ async function j<T>(path: string, init?: RequestInit): Promise<T> {
 
 export interface RefreshResponse {
   ok: true;
-  page?: number;
-  processed?: number;
-  skipped?: number;
-  failed?: number;
-  hasMore?: boolean;
-  queued?: string;
+  scheduled?: boolean;       // new chain kicked off
+  alreadyRunning?: boolean;  // a chain is already in progress
+  page?: number;             // current page (when alreadyRunning)
+  batches?: number;          // batches completed so far (when alreadyRunning)
+  queued?: string;           // legacy issues/comments path
+}
+
+export interface SyncStatus {
+  status: "idle" | "running" | "stopped";
+  page: number | null;
+  batches: number;
+  processed: number;
+  startedAt: number | null;
+  finishedAt: number | null;
+  lastError: string | null;
 }
 
 export interface SyncLogEntry {
@@ -85,6 +94,7 @@ export const api = {
   diff: (n: number) => fetch(`/api/prs/${n}/diff`, { credentials: "include" }).then(r => r.text()),
   refresh: (resource: "prs" | "issues" | "comments" = "prs") =>
     j<RefreshResponse>(`/api/refresh`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ resource }) }),
+  refreshStatus: () => j<SyncStatus>(`/api/refresh/status`),
   logs: (opts?: { limit?: number; level?: string; event?: string }) => {
     const q = new URLSearchParams();
     if (opts?.limit) q.set("limit", String(opts.limit));
