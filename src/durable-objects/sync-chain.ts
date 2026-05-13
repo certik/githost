@@ -38,6 +38,10 @@ import { syncLog } from "../lib/sync-log";
 const ALARM_DELAY_MS = 500;        // gap between batches; let other requests through
 const DEFAULT_MAX_BATCHES = 5;     // sane default — covers normal webhook drift
 const HARD_MAX_BATCHES = 200;      // absolute ceiling regardless of caller request
+const DEFAULT_FORCE_COUNT = 50;    // top-of-list PRs synced regardless of watermark
+                                   //   (matches /api/prs default page size — keeps the
+                                   //   visible list guaranteed-current after one click)
+const HARD_MAX_FORCE_COUNT = 500;  // ceiling for caller-requested force count
 
 export class SyncChain extends DurableObject<Env> {
   /**
@@ -64,14 +68,17 @@ export class SyncChain extends DurableObject<Env> {
       return Response.json({ ok: true, alreadyRunning: true, page, batches, maxBatches });
     }
 
-    // Caller can request a higher (or lower) batch cap. We clamp to
-    // [1, HARD_MAX_BATCHES] so a buggy caller can't make us run forever.
+    // Caller can request a custom batch cap and force count. We clamp both
+    // to safe bounds so a buggy caller can't make us run forever.
     let requestedMax: number | undefined;
+    let requestedForce: number | undefined;
     try {
-      const body = await req.json<{ maxBatches?: number }>();
+      const body = await req.json<{ maxBatches?: number; forceCount?: number }>();
       requestedMax = typeof body?.maxBatches === "number" ? body.maxBatches : undefined;
+      requestedForce = typeof body?.forceCount === "number" ? body.forceCount : undefined;
     } catch { /* no body / non-JSON is fine */ }
     const maxBatches = Math.min(HARD_MAX_BATCHES, Math.max(1, requestedMax ?? DEFAULT_MAX_BATCHES));
+    const forceCount = Math.min(HARD_MAX_FORCE_COUNT, Math.max(0, requestedForce ?? DEFAULT_FORCE_COUNT));
 
     await this.ctx.storage.put({
       status: "running",
@@ -79,13 +86,15 @@ export class SyncChain extends DurableObject<Env> {
       batches: 0,
       processed: 0,
       maxBatches,
+      forceCount,        // total budget at start
+      forceRemaining: forceCount,
       startedAt: Date.now(),
       finishedAt: null,
       lastError: null,
     });
     // Fire the first alarm a few ms out so this response can return promptly.
     await this.ctx.storage.setAlarm(Date.now() + 50);
-    return Response.json({ ok: true, scheduled: true, maxBatches });
+    return Response.json({ ok: true, scheduled: true, maxBatches, forceCount });
   }
 
   private async handleStatus(): Promise<Response> {
@@ -94,10 +103,15 @@ export class SyncChain extends DurableObject<Env> {
     const batches = await this.ctx.storage.get<number>("batches") ?? 0;
     const processed = await this.ctx.storage.get<number>("processed") ?? 0;
     const maxBatches = await this.ctx.storage.get<number>("maxBatches") ?? DEFAULT_MAX_BATCHES;
+    const forceCount = await this.ctx.storage.get<number>("forceCount") ?? 0;
+    const forceRemaining = await this.ctx.storage.get<number>("forceRemaining") ?? 0;
     const startedAt = await this.ctx.storage.get<number>("startedAt") ?? null;
     const finishedAt = await this.ctx.storage.get<number>("finishedAt") ?? null;
     const lastError = await this.ctx.storage.get<string | null>("lastError") ?? null;
-    return Response.json({ status, page, batches, processed, maxBatches, startedAt, finishedAt, lastError });
+    return Response.json({
+      status, page, batches, processed, maxBatches, forceCount, forceRemaining,
+      startedAt, finishedAt, lastError,
+    });
   }
 
   /** Admin escape hatch — wipes state. Lets us recover from a stuck DO. */
@@ -118,6 +132,7 @@ export class SyncChain extends DurableObject<Env> {
     const batches = (await this.ctx.storage.get<number>("batches")) ?? 0;
     const processed = (await this.ctx.storage.get<number>("processed")) ?? 0;
     const maxBatches = (await this.ctx.storage.get<number>("maxBatches")) ?? DEFAULT_MAX_BATCHES;
+    const forceRemaining = (await this.ctx.storage.get<number>("forceRemaining")) ?? 0;
 
     if (batches >= maxBatches) {
       await this.ctx.storage.put({
@@ -132,7 +147,7 @@ export class SyncChain extends DurableObject<Env> {
 
     let result: BatchResult;
     try {
-      result = await refreshPrsBatch(this.env, page);
+      result = await refreshPrsBatch(this.env, page, forceRemaining);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       await this.ctx.storage.put({
@@ -149,10 +164,11 @@ export class SyncChain extends DurableObject<Env> {
 
     const newBatches = batches + 1;
     const newProcessed = processed + result.processed;
+    const newForceRemaining = Math.max(0, forceRemaining - result.forcedConsumed);
 
     await syncLog(this.env, result.failed > 0 ? "warn" : "info", "sync.batch.done",
-      `page=${page} batches=${newBatches} scanned=${result.scanned} processed=${result.processed} skipped=${result.skipped} failed=${result.failed} reason=${result.reason}`,
-      { ...result, batches: newBatches, totalProcessed: newProcessed } as Record<string, unknown>,
+      `page=${page} batches=${newBatches} scanned=${result.scanned} processed=${result.processed} forced=${result.forcedConsumed} skipped=${result.skipped} failed=${result.failed} reason=${result.reason}`,
+      { ...result, batches: newBatches, totalProcessed: newProcessed, forceRemainingAfter: newForceRemaining } as Record<string, unknown>,
     );
 
     if (result.hasMore) {
@@ -161,6 +177,7 @@ export class SyncChain extends DurableObject<Env> {
         page: nextPage,
         batches: newBatches,
         processed: newProcessed,
+        forceRemaining: newForceRemaining,
       });
       await this.ctx.storage.setAlarm(Date.now() + ALARM_DELAY_MS);
     } else {
@@ -169,6 +186,7 @@ export class SyncChain extends DurableObject<Env> {
         page: page,
         batches: newBatches,
         processed: newProcessed,
+        forceRemaining: newForceRemaining,
         finishedAt: Date.now(),
       });
       await syncLog(this.env, "info", "sync.chain.done",

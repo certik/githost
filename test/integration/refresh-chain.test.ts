@@ -196,6 +196,76 @@ describe("refreshPrsBatch", () => {
     expect(result.reason).toBe("watermark-hit");
   });
 
+  it("forceRemaining re-syncs items even when their updated_at matches the mirror", async () => {
+    // Mirror has a full page of PRs that are already current; without
+    // forceRemaining the watermark would skip everything.
+    const ts = "2026-05-13T12:00:00Z";
+    const ms = Date.parse(ts);
+    const items: MockPrListItem[] = [];
+    for (let i = 0; i < REFRESH_PER_PAGE; i++) {
+      await seedMirrorPr({ id: 1000 + i, number: 1000 + i, updatedAt: ms });
+      items.push({ id: 1000 + i, number: 1000 + i, updated_at: ts });
+    }
+
+    installTokenHandler();
+    installListHandler(items);
+    for (const item of items) {
+      installPrDetail(mockDetail({ id: item.id, number: item.number, merged: false, updated_at: ts }));
+    }
+
+    // Force the top 20 items (matches MAX_SYNCS_PER_BATCH so they all fit
+    // in one batch).
+    const result = await refreshPrsBatch(env, 1, 20);
+    expect(result.forcedConsumed).toBe(20);
+    expect(result.processed).toBe(20);
+    expect(result.skipped).toBe(REFRESH_PER_PAGE - 20);
+  });
+
+  it("forceRemaining > MAX_SYNCS_PER_BATCH triggers page-not-drained so the chain re-runs the page", async () => {
+    const ts = "2026-05-13T12:00:00Z";
+    const ms = Date.parse(ts);
+    const items: MockPrListItem[] = [];
+    for (let i = 0; i < REFRESH_PER_PAGE; i++) {
+      await seedMirrorPr({ id: 2000 + i, number: 2000 + i, updatedAt: ms });
+      items.push({ id: 2000 + i, number: 2000 + i, updated_at: ts });
+    }
+    installTokenHandler();
+    installListHandler(items);
+    for (const item of items) {
+      installPrDetail(mockDetail({ id: item.id, number: item.number, merged: false, updated_at: ts }));
+    }
+
+    // Force the top 30 — more than MAX_SYNCS_PER_BATCH=20, so one batch can't
+    // cover them all. The chain should re-run page 1 to drain the rest.
+    const result = await refreshPrsBatch(env, 1, 30);
+    expect(result.forcedConsumed).toBe(20);
+    expect(result.processed).toBe(20);
+    expect(result.hasMore).toBe(true);
+    expect(result.reason).toBe("page-not-drained");
+  });
+
+  it("forceCount=0 falls back to pure watermark behavior", async () => {
+    // Regression guard: passing forceCount=0 (or omitting the arg) MUST
+    // behave identically to the pre-feature watermark code.
+    const ts = "2026-05-13T12:00:00Z";
+    const ms = Date.parse(ts);
+    const items: MockPrListItem[] = [];
+    for (let i = 0; i < REFRESH_PER_PAGE; i++) {
+      await seedMirrorPr({ id: 3000 + i, number: 3000 + i, updatedAt: ms });
+      items.push({ id: 3000 + i, number: 3000 + i, updated_at: ts });
+    }
+    installTokenHandler();
+    installListHandler(items);
+    // No PR-detail handlers installed; if syncPr ran, MSW throws.
+
+    const result = await refreshPrsBatch(env, 1, 0);
+    expect(result.processed).toBe(0);
+    expect(result.forcedConsumed).toBe(0);
+    expect(result.skipped).toBe(REFRESH_PER_PAGE);
+    expect(result.hasMore).toBe(false);
+    expect(result.reason).toBe("watermark-hit");
+  });
+
   it("returns hasMore=false on a short page (end-of-list)", async () => {
     installTokenHandler();
     installListHandler([{ id: 1, number: 1, updated_at: "2026-05-13T00:00:00Z" }]);
