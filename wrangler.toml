@@ -85,7 +85,7 @@ UPSTREAM_REPO  = "lfortran"
 # Single-installation setup: the GitHub App installation id on UPSTREAM_OWNER/REPO.
 # For multi-installation later, replace with a lookup table populated by the
 # `installation` / `installation_repositories` webhook events.
-GITHUB_INSTALLATION_ID = "131928789"
+GITHUB_INSTALLATION_ID = "132095939"
 # Comma-separated list of GitHub logins permitted to sign in. Anyone else is
 # rejected at the OAuth callback with an "access denied" page. Keeping this in
 # plain vars (not secrets) so we can audit the allowlist from `wrangler.toml`.
@@ -125,7 +125,7 @@ id = "6052b8d7481841cb9200d9398b352eaa"
 [env.preview.vars]
 UPSTREAM_OWNER = "lfortran"
 UPSTREAM_REPO  = "lfortran"
-GITHUB_INSTALLATION_ID = "131928789"
+GITHUB_INSTALLATION_ID = "132095939"
 ALLOWED_GITHUB_LOGINS = "certik"
 
 # Disable cron triggers on preview — don't contend with prod's nightly resync.
