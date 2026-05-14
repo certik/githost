@@ -209,7 +209,7 @@ function PrListHeader() {
   return (
     <li className="px-4 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 grid grid-cols-[1fr_8rem_3rem_4.5rem_4.5rem] gap-3 items-center">
       <span>Pull request</span>
-      <span>State</span>
+      <span className="text-center">State</span>
       <span className="text-center" title="Mergeable status from GitHub">Merge</span>
       <span className="text-center" title="Quick tests">Quick</span>
       <span className="text-center" title="Exhaustive tests">Exhaustive</span>
@@ -224,7 +224,7 @@ function PrRow({ p }: { p: PrSummary }) {
         <span className="text-zinc-900 font-medium truncate hover:underline">{p.title}</span>
         <span className="text-zinc-500 text-xs whitespace-nowrap">#{p.number} by {p.authorLogin ?? "?"}</span>
       </a>
-      <span><PrStateBadge pr={p} /></span>
+      <span className="flex justify-center"><PrStateBadge pr={p} /></span>
       <span className="flex justify-center"><MergeableIndicator pr={p} /></span>
       <span className="flex justify-center"><TestStatusDot run={p.quickTest} label="Quick" /></span>
       <span className="flex justify-center"><TestStatusDot run={p.exhaustiveTest} label="Exhaustive" /></span>
