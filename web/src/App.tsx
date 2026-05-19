@@ -5,6 +5,7 @@ import { html as diffHtml, parse as diffParse } from "diff2html";
 import "diff2html/bundles/css/diff2html.min.css";
 import { api, ApiError, type PrSummary, type TestRun, type TestStatus } from "./api";
 import { groupForReviewPriority } from "./lib/review-priority";
+import { formatRelativeTime, formatAbsoluteTime } from "./lib/relative-time";
 import Logs from "./Logs";
 
 type SortMode = "review-priority" | "newest";
@@ -210,8 +211,9 @@ function PrList({ signedIn }: { signedIn: boolean }) {
 /** Header row used at the top of every PR list view, shared for column alignment. */
 function PrListHeader() {
   return (
-    <li className="px-4 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 grid grid-cols-[1fr_8rem_3rem_4.5rem_4.5rem] gap-3 items-center">
+    <li className="px-4 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 grid grid-cols-[1fr_6rem_8rem_3rem_4.5rem_4.5rem] gap-3 items-center">
       <span>Pull request</span>
+      <span className="text-center" title="Time since last modification">Updated</span>
       <span className="text-center">State</span>
       <span className="text-center" title="Mergeable status from GitHub">Merge</span>
       <span className="text-center" title="Quick tests">Quick</span>
@@ -222,11 +224,15 @@ function PrListHeader() {
 
 function PrRow({ p }: { p: PrSummary }) {
   return (
-    <li className="px-4 py-3 hover:bg-zinc-50 grid grid-cols-[1fr_8rem_3rem_4.5rem_4.5rem] gap-3 items-center">
+    <li className="px-4 py-3 hover:bg-zinc-50 grid grid-cols-[1fr_6rem_8rem_3rem_4.5rem_4.5rem] gap-3 items-center">
       <a href={p.htmlUrl} target="_blank" rel="noreferrer" className="flex items-baseline gap-2 min-w-0">
         <span className="text-zinc-900 font-medium truncate hover:underline">{p.title}</span>
         <span className="text-zinc-500 text-xs whitespace-nowrap">#{p.number} by {p.authorLogin ?? "?"}</span>
       </a>
+      <span
+        className="text-xs text-zinc-500 text-center tabular-nums whitespace-nowrap"
+        title={`Updated ${formatAbsoluteTime(p.updatedAt)}`}
+      >{formatRelativeTime(p.updatedAt)}</span>
       <span className="flex justify-center"><PrStateBadge pr={p} /></span>
       <span className="flex justify-center"><MergeableIndicator pr={p} /></span>
       <span className="flex justify-center"><TestStatusDot run={p.quickTest} label="Quick" /></span>

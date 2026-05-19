@@ -81,7 +81,9 @@ apiRoutes.get("/prs", async (c) => {
   // Cross-DB so we do an in-memory join. Two rows max per PR (quick, exhaustive).
   // Also compute the upstream GitHub URL per PR so the SPA can link out.
   const repoUrl = `https://github.com/${c.env.UPSTREAM_OWNER}/${c.env.UPSTREAM_REPO}`;
-  let items: Array<typeof rows[number] & {
+  let items: Array<Omit<typeof rows[number], "createdAt" | "updatedAt"> & {
+    createdAt: number;
+    updatedAt: number;
     htmlUrl: string;
     quickTest: TestRunOut | null;
     exhaustiveTest: TestRunOut | null;
@@ -102,6 +104,11 @@ apiRoutes.get("/prs", async (c) => {
     }
     items = rows.map((p) => ({
       ...p,
+      // Drizzle returns timestamp_ms columns as Date objects which JSON
+      // serializes to ISO strings; the SPA needs epoch ms for arithmetic
+      // (relative-time formatting), so flatten here.
+      createdAt: p.createdAt.getTime(),
+      updatedAt: p.updatedAt.getTime(),
       htmlUrl: `${repoUrl}/pull/${p.number}`,
       quickTest: toTestRunOut(byPr.get(p.id)?.quick),
       exhaustiveTest: toTestRunOut(byPr.get(p.id)?.exhaustive),

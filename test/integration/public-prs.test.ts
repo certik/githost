@@ -41,6 +41,21 @@ describe("public /api/prs (anonymous)", () => {
     expect(body.offset).toBe(0);
   });
 
+  it("serializes updatedAt and createdAt as epoch-ms numbers (not ISO strings)", async () => {
+    // The SPA does arithmetic on these timestamps (relative-time formatter);
+    // if Drizzle's Date object leaks into the JSON response we'd get
+    // "NaN ago" everywhere. Lock the wire format here.
+    await seedPrs(1);
+    const res = await fetchSelf("https://example.com/api/prs");
+    const body = await res.json<{ items: Array<{ updatedAt: unknown; createdAt: unknown }> }>();
+    expect(body.items.length).toBe(1);
+    const item = body.items[0]!;
+    expect(typeof item.updatedAt).toBe("number");
+    expect(typeof item.createdAt).toBe("number");
+    expect(Number.isFinite(item.updatedAt as number)).toBe(true);
+    expect(Number.isFinite(item.createdAt as number)).toBe(true);
+  });
+
   it("caps anonymous response at 50 items even when ?limit=200 is requested", async () => {
     // Seed 60 PRs and ask for 200 — anon should still get 50.
     await seedPrs(60);
