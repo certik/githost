@@ -213,7 +213,7 @@ function PrListHeader() {
   return (
     <li className="px-4 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 grid grid-cols-[1fr_6rem_8rem_3rem_4.5rem_4.5rem] gap-3 items-center">
       <span>Pull request</span>
-      <span className="text-right" title="Time since last modification">Updated</span>
+      <span className="text-center" title="Time since last modification">Updated</span>
       <span className="text-center">State</span>
       <span className="text-center" title="Mergeable status from GitHub">Merge</span>
       <span className="text-center" title="Quick tests">Quick</span>
@@ -230,7 +230,7 @@ function PrRow({ p }: { p: PrSummary }) {
         <span className="text-zinc-500 text-xs whitespace-nowrap">#{p.number} by {p.authorLogin ?? "?"}</span>
       </a>
       <span
-        className="text-xs text-zinc-500 text-right tabular-nums whitespace-nowrap"
+        className="text-xs text-zinc-500 text-center tabular-nums whitespace-nowrap"
         title={`Updated ${formatAbsoluteTime(p.updatedAt)}`}
       >{formatRelativeTime(p.updatedAt)}</span>
       <span className="flex justify-center"><PrStateBadge pr={p} /></span>
