@@ -99,7 +99,9 @@ describe("API endpoints require auth", () => {
     { method: "GET",  path: "/api/prs/123/diff" },
     { method: "GET",  path: "/api/refresh/status" },
     { method: "GET",  path: "/api/logs" },
+    { method: "PUT",  path: "/api/prs/123/tests/quick",     body: { status: "queued" } },
     { method: "POST", path: "/api/refresh",                 body: { resource: "prs" } },
+    { method: "POST", path: "/api/refresh/reset" },
     { method: "POST", path: "/api/branches",                body: { name: "x", from: "main" } },
     { method: "POST", path: "/api/prs/123/post-review",     body: { aiReviewId: "x", event: "COMMENT" } },
   ];
