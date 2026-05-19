@@ -13,21 +13,22 @@ import { currentUser, loadSession, requireSession } from "../lib/auth";
 import { appUpdate } from "../lib/audit";
 
 /**
- * Public-ish JSON API consumed by the React SPA.
+ * JSON API consumed by the React SPA.
  *
  * Auth policy:
- *   - GET endpoints (PR list/detail/diff) are anonymous-readable; that's by
- *     design — this is a read-mostly view of a public repo.
- *   - Mutations and anything that calls GitHub on our installation's behalf
-/**
- * Public-ish JSON API consumed by the React SPA.
- *
- * Auth policy (private mode):
- *   - GET /api/me is anonymous-readable so the SPA can render a sign-in state.
- *   - Everything else requires a session (`requireSession`). This is enforced
- *     via a wildcard middleware below; individual handlers don't repeat it.
+ *   - GET /api/me is anonymous so the SPA can render a sign-in state.
+ *   - GET /api/prs is anonymous-readable, but anonymous callers are pinned to
+ *     the top-50/offset-0 slice (independent of any `limit`/`offset` query
+ *     param) and the response carries Cache-Control so Cloudflare's edge
+ *     absorbs repeat hits. Authenticated callers retain full paging.
+ *   - Everything else requires a session (`requireSession`). Enforced via a
+ *     wildcard middleware below; individual handlers don't repeat it.
  */
 export const apiRoutes = new Hono<{ Bindings: Env }>();
+
+// Anonymous limits for /api/prs. Matches the SPA's default page size, which
+// is also the only slice the public front page ever shows.
+const ANON_PRS_LIMIT = 50;
 
 // GET /api/me — who am I? (or null). Stays anonymous so the unauthenticated
 // SPA can still render its header.
@@ -36,14 +37,21 @@ apiRoutes.get("/me", async (c) => {
   return c.json({ user });
 });
 
-// Everything registered below this line requires a session.
-apiRoutes.use("*", requireSession);
-
 // GET /api/prs?state=open&limit=50&offset=0
+//
+// Anonymous callers: limit and offset are ignored — every anonymous response
+// is the top ANON_PRS_LIMIT PRs at offset 0 (optionally filtered by `state`).
+// This keeps the response deterministic per state value, which lets the edge
+// cache it under `Cache-Control: public`. Authenticated callers keep the
+// original paging contract.
 apiRoutes.get("/prs", async (c) => {
+  const session = await loadSession(c);
+  const isAnon = !session;
   const state = c.req.query("state");
-  const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10) || 50, 200);
-  const offset = parseInt(c.req.query("offset") ?? "0", 10) || 0;
+  const limit = isAnon
+    ? ANON_PRS_LIMIT
+    : Math.min(parseInt(c.req.query("limit") ?? "50", 10) || 50, 200);
+  const offset = isAnon ? 0 : (parseInt(c.req.query("offset") ?? "0", 10) || 0);
 
   const db = mirrorDb(c.env.MIRROR_DB);
   const rows = await db.select({
@@ -100,8 +108,18 @@ apiRoutes.get("/prs", async (c) => {
     }));
   }
 
+  if (isAnon) {
+    // Edge-cache the anonymous response so Cloudflare absorbs repeat hits
+    // without invoking the Worker. max-age covers browser caches; s-maxage
+    // gives the edge a slightly longer grip. Authenticated callers stay
+    // uncached because their requests can vary by user (future-proofing).
+    c.header("Cache-Control", "public, max-age=30, s-maxage=60");
+  }
   return c.json({ items, limit, offset });
 });
+
+// Everything registered below this line requires a session.
+apiRoutes.use("*", requireSession);
 
 interface TestRunOut {
   status: "queued" | "running" | "passed" | "failed" | "skipped";

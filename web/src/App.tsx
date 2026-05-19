@@ -31,7 +31,7 @@ export default function App() {
         <Link to="/" className="font-semibold text-zinc-900">githost</Link>
         <nav className="text-sm text-zinc-600 flex gap-4 flex-1">
           <Link to="/" className="hover:text-zinc-900">PRs</Link>
-          <Link to="/logs" className="hover:text-zinc-900">Sync log</Link>
+          {me?.user && <Link to="/logs" className="hover:text-zinc-900">Sync log</Link>}
         </nav>
         {me?.user ? (
           <div className="flex items-center gap-3 text-sm">
@@ -161,23 +161,26 @@ function PrList({ signedIn }: { signedIn: boolean }) {
             <option value="closed">Closed</option>
             <option value="all">All</option>
           </select>
-          <select
-            className="border rounded px-2 py-1 text-sm"
-            value={maxBatches}
-            onChange={(e) => setMaxBatches(parseInt(e.target.value, 10))}
-            title="Max batches per refresh click (20 PRs per batch). Higher = catches up more drift but takes longer."
-            disabled={refresh.isPending || syncStatus.data?.status === "running"}
-          >
-            {MAX_BATCHES_CHOICES.map((n) => (
-              <option key={n} value={n}>{n} batches</option>
-            ))}
-          </select>
-          <button
-            className="border rounded px-3 py-1 text-sm bg-white hover:bg-zinc-100 disabled:opacity-50"
-            onClick={() => refresh.mutate()}
-            disabled={refresh.isPending || !signedIn}
-            title={signedIn ? undefined : "Sign in to refresh from GitHub"}
-          >{refresh.isPending ? "Refreshing…" : "Manual refresh"}</button>
+          {signedIn && (
+            <>
+              <select
+                className="border rounded px-2 py-1 text-sm"
+                value={maxBatches}
+                onChange={(e) => setMaxBatches(parseInt(e.target.value, 10))}
+                title="Max batches per refresh click (20 PRs per batch). Higher = catches up more drift but takes longer."
+                disabled={refresh.isPending || syncStatus.data?.status === "running"}
+              >
+                {MAX_BATCHES_CHOICES.map((n) => (
+                  <option key={n} value={n}>{n} batches</option>
+                ))}
+              </select>
+              <button
+                className="border rounded px-3 py-1 text-sm bg-white hover:bg-zinc-100 disabled:opacity-50"
+                onClick={() => refresh.mutate()}
+                disabled={refresh.isPending}
+              >{refresh.isPending ? "Refreshing…" : "Manual refresh"}</button>
+            </>
+          )}
         </div>
       </div>
 

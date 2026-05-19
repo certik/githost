@@ -4,7 +4,6 @@ import { webhookRoutes } from "./routes/webhook";
 import { apiRoutes } from "./routes/api";
 import { authRoutes } from "./routes/auth";
 import { handleScheduled } from "./scheduled";
-import { loadSession } from "./lib/auth";
 
 // DO class export — required for the runtime to instantiate the binding
 // declared in wrangler.toml.
@@ -19,31 +18,15 @@ app.route("/api", apiRoutes);
 app.route("/auth", authRoutes);
 
 /**
- * Catch-all: serve the SPA's static assets. Private-mode gate lives here.
- *
- * Behavior:
- *   - Anything under /auth/* or /healthz is exempt (the login flow itself must
- *     be reachable to an unauthenticated user). These are handled by their
- *     own routes above; reaching the catch-all means they didn't match.
- *   - For any other path, require a valid session. If missing:
- *       * HTML / document navigations  → 302 to /auth/login
- *       * Everything else (XHR/fetch, asset requests) → 401 JSON
- *   - With `run_worker_first = true` set in wrangler.toml the Worker runs for
- *     every request, so this gate covers the SPA's HTML AND its JS/CSS assets.
- *     That's intentional: we don't want unauthenticated users to even see the
- *     SPA's source/structure.
+ * Catch-all: serve the SPA's static assets. The front page is intentionally
+ * public — anyone can load index.html plus its JS/CSS bundle and see the
+ * top-N PR list rendered from `GET /api/prs` (anonymous-readable, see
+ * `routes/api.ts`). The SPA itself decides what to render based on
+ * `GET /api/me`, and the SPA's interactive paths (PR detail, diff, refresh,
+ * logs, post-review, branches) all hit endpoints that still require a
+ * session, so anonymous users get the read-only landing experience.
  */
-app.all("*", async (c) => {
-  const user = await loadSession(c);
-  if (!user) {
-    const accept = c.req.header("accept") ?? "";
-    const dest = c.req.header("sec-fetch-dest") ?? "";
-    const isDocumentNav = dest === "document" || accept.includes("text/html");
-    if (isDocumentNav) return c.redirect("/auth/login", 302);
-    return c.json({ error: "authentication required" }, 401);
-  }
-  return c.env.ASSETS.fetch(c.req.raw);
-});
+app.all("*", async (c) => c.env.ASSETS.fetch(c.req.raw));
 
 export default {
   fetch: app.fetch,
