@@ -17,16 +17,8 @@ async function fetchSelf(input: RequestInfo | URL, init?: RequestInit): Promise<
 }
 
 describe("auth gate", () => {
-  it("redirects anonymous browser navigation to /auth/login", async () => {
-    const res = await fetchSelf("https://example.com/", {
-      headers: { "sec-fetch-dest": "document", accept: "text/html" },
-    });
-    expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe("/auth/login");
-  });
-
-  it("returns 401 JSON on anonymous API call (non-document)", async () => {
-    const res = await fetchSelf("https://example.com/api/prs");
+  it("returns 401 JSON on a protected API endpoint when anonymous", async () => {
+    const res = await fetchSelf("https://example.com/api/refresh/status");
     expect(res.status).toBe(401);
     const body = await res.json<{ error: string }>();
     expect(body.error).toMatch(/auth/i);
@@ -103,9 +95,10 @@ describe("auth gate", () => {
  */
 describe("API endpoints require auth", () => {
   const PROTECTED: Array<{ method: string; path: string; body?: unknown }> = [
-    { method: "GET",  path: "/api/prs" },
     { method: "GET",  path: "/api/prs/123" },
     { method: "GET",  path: "/api/prs/123/diff" },
+    { method: "GET",  path: "/api/refresh/status" },
+    { method: "GET",  path: "/api/logs" },
     { method: "POST", path: "/api/refresh",                 body: { resource: "prs" } },
     { method: "POST", path: "/api/branches",                body: { name: "x", from: "main" } },
     { method: "POST", path: "/api/prs/123/post-review",     body: { aiReviewId: "x", event: "COMMENT" } },
@@ -113,6 +106,7 @@ describe("API endpoints require auth", () => {
 
   const ANONYMOUS: Array<{ method: string; path: string }> = [
     { method: "GET", path: "/api/me" },
+    { method: "GET", path: "/api/prs" },
   ];
 
   it.each(PROTECTED)("$method $path 401s anonymously", async ({ method, path, body }) => {
