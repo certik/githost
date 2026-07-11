@@ -25,6 +25,7 @@ migrations/
   mirror/0001_init.sql  # githost-mirror DB (regenerable cache of GitHub state)
   app/0001_init.sql     # githost-app    DB (irreplaceable local data)
 web/                    # React + Vite + Tailwind SPA, builds to web/dist
+cli/                    # Pure-C CLI for the PR dashboard (libcurl + corec arenas)
 ```
 
 ## One-time setup
@@ -131,6 +132,41 @@ The `dev-login` endpoint bypasses GitHub OAuth and creates an `app_user` named
 `dev` (override with `?login=alice`). It is **only enabled when**
 `DEV_LOGIN_ENABLED="true"` is in `.dev.vars` — in production that var is
 unset and the endpoint returns 404. Asserted by tests.
+
+## CLI (`cli/`)
+
+A small pure-C client that queries `GET /api/prs` the same way the web UI does
+(anonymous, no auth yet) and prints the review-priority table in 80 columns.
+
+```bash
+cd cli
+cmake -S . -B build && cmake --build build
+./build/githost                          # production default URL
+./build/githost --url http://127.0.0.1:8787 pr list --passed   # local worker
+./build/githost pr view 12028
+```
+
+### CLI tests (reference diffs)
+
+The CLI is snapshot-tested against a **local fixture API**, not production:
+
+1. `cli/tests/serve_fixture.py` serves `cli/tests/fixtures/api_prs.json` on an
+   ephemeral port (`GET /api/prs` only).
+2. `cli/tests/run_tests.sh` runs the binary with `--url <local> --no-color`.
+3. stdout is `diff -u`'d against `cli/tests/reference/*.txt`.
+
+Relative times are deterministic: the CLI uses `max(updatedAt)` from the
+payload as “now”, not wall-clock time.
+
+```bash
+cd cli && cmake -S . -B build && cmake --build build
+./tests/run_tests.sh ./build/githost          # or: ctest --test-dir build
+UPDATE_REFS=1 ./tests/run_tests.sh ./build/githost   # refresh goldens after UI changes
+```
+
+Why full-output references? Grouping, sort order, truncation, and the 80-column
+layout *are* the product; one diff catches what field-level asserts miss.
+See [`cli/README.md`](cli/README.md) for build flags and more commands.
 
 ### Fixture data
 

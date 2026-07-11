@@ -4,6 +4,7 @@ node_modules/
 # Build output
 dist/
 web/dist/
+cli/build/
 *.tsbuildinfo
 
 # Wrangler local state (contains local D1 SQLite files — DO NOT commit)

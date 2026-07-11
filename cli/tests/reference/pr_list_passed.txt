@@ -1,0 +1,12 @@
+Pull requests  (review priority · open)
+
+READY FOR REVIEW
+
+Quick + Exhaustive passed (3)
+────────────────────────────────────────────────────────────────────────────────
+  #       TITLE                                          AUTHOR        AGE M Q E
+  #1001   fix: cycle segfault outside a loop             alice         now ✓ ✓ ✓
+  #1002   fix: handle ArrayConstant in LogicalToLogic... bob            5h ✓ ✓ ✓
+  #1003   Preserve real128 constants in implied do fo... carol         11h ✓ ✓ ✓
+
+3 ready · 0 drafts shown · 12 total from API

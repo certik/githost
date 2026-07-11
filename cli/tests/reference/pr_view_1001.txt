@@ -1,0 +1,10 @@
+PR #1001 fix: cycle segfault outside a loop
+  State:     Ready for review
+  Author:    alice
+  Branch:    branch-1001 → main
+  Updated:   now
+  Mergeable: ✓ (clean)
+  Quick:     ✓ passed @ 0000000
+  Exhaustive: ✓ passed @ 0000000
+  Priority:  Quick + Exhaustive passed (0)
+  URL:       https://github.com/example/repo/pull/1001

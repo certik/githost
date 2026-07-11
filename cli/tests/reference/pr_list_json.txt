@@ -1,0 +1,50 @@
+{
+  "items": [
+    {
+      "number": 1001,
+      "title": "fix: cycle segfault outside a loop",
+      "state": "open",
+      "draft": false,
+      "merged": false,
+      "mergeable": true,
+      "authorLogin": "alice",
+      "htmlUrl": "https://github.com/example/repo/pull/1001",
+      "updatedAt": 1700000000000,
+      "priority": 0,
+      "priorityLabel": "Quick + Exhaustive passed",
+      "quickTest": "passed",
+      "exhaustiveTest": "passed"
+    },
+    {
+      "number": 1002,
+      "title": "fix: handle ArrayConstant in LogicalToLogical cast",
+      "state": "open",
+      "draft": false,
+      "merged": false,
+      "mergeable": true,
+      "authorLogin": "bob",
+      "htmlUrl": "https://github.com/example/repo/pull/1002",
+      "updatedAt": 1699982000000,
+      "priority": 0,
+      "priorityLabel": "Quick + Exhaustive passed",
+      "quickTest": "passed",
+      "exhaustiveTest": "passed"
+    },
+    {
+      "number": 1003,
+      "title": "Preserve real128 constants in implied do folding",
+      "state": "open",
+      "draft": false,
+      "merged": false,
+      "mergeable": true,
+      "authorLogin": "carol",
+      "htmlUrl": "https://github.com/example/repo/pull/1003",
+      "updatedAt": 1699960400000,
+      "priority": 0,
+      "priorityLabel": "Quick + Exhaustive passed",
+      "quickTest": "passed",
+      "exhaustiveTest": "passed"
+    }
+  ],
+  "count": 3
+}
