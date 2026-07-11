@@ -59,12 +59,16 @@ payload as “now”, not wall-clock time.
 cmake -S . -B build && cmake --build build
 ./tests/run_tests.sh ./build/githost
 
-# or via CTest
+# or via CTest / npm from the repo root
 ctest --test-dir build --output-on-failure
+npm run test:cli
 
 # after an intentional layout change, refresh snapshots:
 UPDATE_REFS=1 ./tests/run_tests.sh ./build/githost
 ```
+
+CI (`.github/workflows/ci.yml`) runs the same build + `run_tests.sh` on every
+PR and push to `main` (Ubuntu, Ninja, libcurl).
 
 Why full-output references rather than field-by-field asserts?
 

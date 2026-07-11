@@ -216,7 +216,7 @@ Four workflows live in `.github/workflows/`:
 
 | File | Trigger | What it does |
 |---|---|---|
-| `ci.yml` | every push & PR | typecheck Worker, typecheck + build SPA, `wrangler deploy --dry-run` |
+| `ci.yml` | every push & PR to `main` | typecheck Worker, typecheck + build SPA, `wrangler deploy --dry-run`, Worker tests, **CLI build + reference tests** |
 | `deploy.yml` | push to `main`, manual | snapshot D1 Time Travel bookmarks → apply prod migrations → `wrangler deploy` |
 | `preview.yml` | PR open / push / reopen | apply staging migrations → `wrangler versions upload --env preview` → sticky PR comment with the preview URL |
 | `backup.yml` | nightly at 04:00 UTC, manual | `wrangler d1 export --remote` for both DBs → upload as 90-day workflow artifact |
