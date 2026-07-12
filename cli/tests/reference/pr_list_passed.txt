@@ -5,8 +5,8 @@ READY FOR REVIEW
 Quick + Exhaustive passed (3)
 ────────────────────────────────────────────────────────────────────────────────
   #       TITLE                                          AUTHOR        AGE M Q E
-  #1001   fix: cycle segfault outside a loop             alice         now ✓ ✓ ✓
-  #1002   fix: handle ArrayConstant in LogicalToLogic... bob            5h ✓ ✓ ✓
-  #1003   Preserve real128 constants in implied do fo... carol         11h ✓ ✓ ✓
+  #1001   CI-green and mergeable: add feature X          alice         now ✓ ✓ ✓
+  #1007   CI-green: tidy typo                            carol          0m ✓ ✓ ✓
+  #1013   CI-green, mergeable unknown (still computing)  bob            1m ? ✓ ✓
 
-3 ready · 0 drafts shown · 12 total from API
+3 ready · 0 drafts shown · 15 total from API

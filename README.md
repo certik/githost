@@ -146,27 +146,26 @@ cmake -S . -B build && cmake --build build
 ./build/githost pr view 12028
 ```
 
-### CLI tests (reference diffs)
+### CLI tests (reference diffs against the real Worker)
 
-The CLI is snapshot-tested against a **local fixture API**, not production:
+The CLI is snapshot-tested against **local `wrangler dev` + seeded D1** (the
+same `scripts/seed-*.sql` used for `npm run dev:seed`), not a JSON fixture:
 
-1. `cli/tests/serve_fixture.py` serves `cli/tests/fixtures/api_prs.json` on an
-   ephemeral port (`GET /api/prs` only).
-2. `cli/tests/run_tests.sh` runs the binary with `--url <local> --no-color`.
-3. stdout is `diff -u`'d against `cli/tests/reference/*.txt`.
+1. Seed fixed PRs / test runs into local D1.
+2. Start the Worker on port 8799.
+3. Run `githost --url http://127.0.0.1:8799 --no-color …` and `diff` stdout
+   against `cli/tests/reference/*.txt`.
 
-Relative times are deterministic: the CLI uses `max(updatedAt)` from the
-payload as “now”, not wall-clock time.
+Relative times stay deterministic (`max(updatedAt)` + fixed seed timestamps).
+Server wire-format changes break these tests, which is intentional.
 
 ```bash
-cd cli && cmake -S . -B build && cmake --build build
-./tests/run_tests.sh ./build/githost          # or: ctest --test-dir build
-UPDATE_REFS=1 ./tests/run_tests.sh ./build/githost   # refresh goldens after UI changes
+cmake -S cli -B cli/build && cmake --build cli/build
+./cli/tests/run_tests.sh ./cli/build/githost   # or: npm run test:cli
+UPDATE_REFS=1 ./cli/tests/run_tests.sh ./cli/build/githost   # refresh goldens
 ```
 
-Why full-output references? Grouping, sort order, truncation, and the 80-column
-layout *are* the product; one diff catches what field-level asserts miss.
-See [`cli/README.md`](cli/README.md) for build flags and more commands.
+See [`cli/README.md`](cli/README.md) for env vars and more commands.
 
 ### Fixture data
 

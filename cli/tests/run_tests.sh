@@ -1,26 +1,35 @@
 #!/usr/bin/env bash
-# Reference tests for the githost C CLI.
+# Reference tests for the githost C CLI against the *real* Worker + local D1.
 #
 # Strategy:
-#   1. Serve a fixed JSON fixture on a local ephemeral port (no Cloudflare).
-#   2. Run the CLI against that base URL with --no-color.
-#   3. Diff stdout against checked-in reference files.
+#   1. Apply migrations and seed fixed SQL fixtures (scripts/seed-*.sql).
+#   2. Start `wrangler dev` on a dedicated port (default 8799).
+#   3. Run the CLI with `--url http://127.0.0.1:$PORT --no-color`.
+#   4. Diff stdout against cli/tests/reference/*.txt.
 #
-# Why reference diffs (not unit asserts on individual fields)?
-#   The CLI's value is the rendered table. A full-screen snapshot catches
-#   grouping, sort order, truncation, and 80-col layout in one shot. Relative
-#   times are deterministic because the CLI uses max(updatedAt) as "now".
+# Relative times stay deterministic: seed timestamps are fixed epoch-ms values
+# and the CLI uses max(updatedAt) as "now".
 #
-# Update references after an intentional UI change:
+# Update goldens after an intentional UI or seed change:
 #   UPDATE_REFS=1 ./cli/tests/run_tests.sh ./cli/build/githost
+#
+# Env:
+#   GITHOST_TEST_PORT   wrangler port (default 8799)
+#   UPDATE_REFS=1       rewrite reference files
+#   SKIP_SEED=1         skip npm run dev:seed (reuse existing local D1)
+#   SKIP_WRANGLER=1     don't start wrangler; use already-running server at PORT
 
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+CLI_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(cd "$CLI_ROOT/.." && pwd)"
 BIN="${1:-}"
+PORT="${GITHOST_TEST_PORT:-8799}"
+BASE_URL="http://127.0.0.1:${PORT}"
+
 if [[ -z "$BIN" ]]; then
-  if [[ -x "$ROOT/build/githost" ]]; then
-    BIN="$ROOT/build/githost"
+  if [[ -x "$CLI_ROOT/build/githost" ]]; then
+    BIN="$CLI_ROOT/build/githost"
   else
     echo "usage: $0 <path-to-githost-binary>" >&2
     exit 2
@@ -31,41 +40,92 @@ if [[ ! -x "$BIN" ]]; then
   exit 2
 fi
 
-REF_DIR="$ROOT/tests/reference"
-FIX_DIR="$ROOT/tests/fixtures"
+REF_DIR="$CLI_ROOT/tests/reference"
 OUT_DIR="${TMPDIR:-/tmp}/githost-cli-test-$$"
 mkdir -p "$OUT_DIR"
+WRANGLER_PID=""
+
 cleanup() {
-  if [[ -n "${SRV_PID:-}" ]]; then
-    kill "$SRV_PID" 2>/dev/null || true
-    wait "$SRV_PID" 2>/dev/null || true
+  if [[ -n "$WRANGLER_PID" ]]; then
+    kill "$WRANGLER_PID" 2>/dev/null || true
+    wait "$WRANGLER_PID" 2>/dev/null || true
   fi
   rm -rf "$OUT_DIR"
 }
 trap cleanup EXIT
 
-python3 "$ROOT/tests/serve_fixture.py" \
-  --fixture "$FIX_DIR/api_prs.json" >"$OUT_DIR/url.txt" &
-SRV_PID=$!
+cd "$REPO_ROOT"
 
-# Wait for the server to print its base URL.
-for _ in $(seq 1 50); do
-  if [[ -s "$OUT_DIR/url.txt" ]]; then
-    break
+# --- .dev.vars (required by wrangler; never committed) ---
+if [[ ! -f .dev.vars ]]; then
+  if [[ -f .dev.vars.example ]]; then
+    echo "Creating .dev.vars from .dev.vars.example for local/CI Worker"
+    cp .dev.vars.example .dev.vars
+  else
+    echo "missing .dev.vars and .dev.vars.example" >&2
+    exit 1
   fi
-  sleep 0.05
-done
-BASE_URL="$(tr -d '[:space:]' <"$OUT_DIR/url.txt")"
-if [[ -z "$BASE_URL" ]]; then
-  echo "fixture server did not start" >&2
-  exit 1
 fi
 
-# Probe /api/prs once so we fail early if the server is broken.
-curl -sf "$BASE_URL/api/prs" -o "$OUT_DIR/probe.json" || {
-  echo "fixture server not answering at $BASE_URL/api/prs" >&2
+# --- SPA assets (Worker ASSETS binding) ---
+if [[ ! -f web/dist/index.html ]]; then
+  echo "Building web/dist (required by wrangler assets)…"
+  npm -w web run build
+fi
+
+# --- Seed local D1 ---
+if [[ "${SKIP_SEED:-}" != "1" ]]; then
+  echo "Seeding local D1 (npm run dev:seed)…"
+  npm run dev:seed
+fi
+
+# --- Start Worker ---
+if [[ "${SKIP_WRANGLER:-}" != "1" ]]; then
+  if curl -sf "$BASE_URL/healthz" >/dev/null 2>&1; then
+    echo "error: something already answers on $BASE_URL — free port $PORT or set GITHOST_TEST_PORT" >&2
+    exit 1
+  fi
+  echo "Starting wrangler dev on $BASE_URL …"
+  # --show-interactive-dev-session=false avoids TTY prompts in CI.
+  npx wrangler dev --ip 127.0.0.1 --port "$PORT" \
+    --show-interactive-dev-session=false \
+    >"$OUT_DIR/wrangler.log" 2>&1 &
+  WRANGLER_PID=$!
+
+  ready=0
+  for _ in $(seq 1 90); do
+    if curl -sf "$BASE_URL/api/prs" -o "$OUT_DIR/probe.json" 2>/dev/null; then
+      ready=1
+      break
+    fi
+    # Bail early if wrangler died
+    if ! kill -0 "$WRANGLER_PID" 2>/dev/null; then
+      echo "wrangler exited early; log:" >&2
+      cat "$OUT_DIR/wrangler.log" >&2 || true
+      exit 1
+    fi
+    sleep 0.5
+  done
+  if [[ "$ready" != "1" ]]; then
+    echo "Worker did not become ready at $BASE_URL/api/prs; wrangler log:" >&2
+    cat "$OUT_DIR/wrangler.log" >&2 || true
+    exit 1
+  fi
+  echo "Worker ready."
+else
+  if ! curl -sf "$BASE_URL/api/prs" -o "$OUT_DIR/probe.json"; then
+    echo "SKIP_WRANGLER=1 but $BASE_URL/api/prs is not reachable" >&2
+    exit 1
+  fi
+fi
+
+# Sanity: seeded data present
+item_count="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["items"]))' "$OUT_DIR/probe.json")"
+if [[ "$item_count" -lt 1 ]]; then
+  echo "GET /api/prs returned 0 items — seed missing?" >&2
   exit 1
-}
+fi
+echo "GET /api/prs → $item_count items"
 
 run_case() {
   local name="$1"
@@ -95,10 +155,11 @@ run_case() {
   echo "OK   $name"
 }
 
+# Cases exercise the public (anonymous) API the CLI uses today.
 run_case pr_list pr list
 run_case pr_list_passed pr list --passed
 run_case pr_list_all pr list --all
 run_case pr_view_1001 pr view 1001
 run_case pr_list_json pr list --passed --json
 
-echo "All CLI reference tests passed."
+echo "All CLI reference tests passed (against $BASE_URL)."

@@ -57,10 +57,12 @@ target_link_libraries(githost PRIVATE CURL::libcurl)
 
 install(TARGETS githost RUNTIME DESTINATION bin)
 
+# Reference tests need the repo root (wrangler, seed scripts, web/dist).
+# Prefer: npm run test:cli   or   ./cli/tests/run_tests.sh ./cli/build/githost
 enable_testing()
 add_test(
     NAME githost_cli_reference
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_tests.sh
             $<TARGET_FILE:githost>
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..
 )

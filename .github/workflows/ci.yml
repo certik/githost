@@ -42,14 +42,20 @@ jobs:
       - name: Run tests
         run: npm test
 
-  # Pure-C CLI (cli/): build with libcurl + corec arenas, then snapshot-test
-  # against a local fixture server (no Cloudflare / no network).
+  # Pure-C CLI against the real local Worker + seeded D1 (not a JSON fixture).
   cli:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install build dependencies
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - run: npm ci
+
+      - name: Install C build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -58,11 +64,16 @@ jobs:
             libcurl4-openssl-dev \
             pkg-config
 
-      - name: Configure
-        run: cmake -S cli -B cli/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: Local Worker secrets for wrangler dev
+        run: cp .dev.vars.example .dev.vars
 
-      - name: Build
-        run: cmake --build cli/build
+      - name: Build SPA assets (Worker ASSETS binding)
+        run: npm -w web run build
 
-      - name: Reference tests
+      - name: Build CLI
+        run: |
+          cmake -S cli -B cli/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build cli/build
+
+      - name: CLI reference tests (seed D1 + wrangler dev + diff)
         run: cli/tests/run_tests.sh cli/build/githost

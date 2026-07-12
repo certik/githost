@@ -42,39 +42,49 @@ Local review stubs (upload not implemented yet):
 ./build/githost review path 12028
 ```
 
-## Tests (reference diffs)
+## Tests (reference diffs against the real Worker)
 
-CLI output is snapshot-tested:
+CLI output is snapshot-tested against the **actual local Worker + D1**, not a
+hand-maintained JSON fixture:
 
-1. `tests/serve_fixture.py` serves a fixed `tests/fixtures/api_prs.json` on an
-   ephemeral local port (no Cloudflare, no network).
-2. The binary is run with `--url <that base> --no-color`.
-3. stdout is compared to `tests/reference/*.txt` with `diff -u`.
+1. `npm run dev:seed` applies migrations and loads `scripts/seed-*.sql`
+   (fixed epoch-ms timestamps and test-run matrix).
+2. `wrangler dev` serves the Worker on port **8799** (override with
+   `GITHOST_TEST_PORT`).
+3. The binary is run with `--url http://127.0.0.1:8799 --no-color`.
+4. stdout is compared to `tests/reference/*.txt` with `diff -u`.
 
 Relative timestamps stay stable because the CLI uses `max(updatedAt)` from the
-payload as “now”, not wall-clock time.
+payload as “now”, and the seed SQL uses fixed `updated_at` values.
 
 ```bash
-# build + run
-cmake -S . -B build && cmake --build build
-./tests/run_tests.sh ./build/githost
-
-# or via CTest / npm from the repo root
-ctest --test-dir build --output-on-failure
+# from repo root (recommended)
+cmake -S cli -B cli/build && cmake --build cli/build
+./cli/tests/run_tests.sh ./cli/build/githost
+# or:
 npm run test:cli
 
-# after an intentional layout change, refresh snapshots:
-UPDATE_REFS=1 ./tests/run_tests.sh ./build/githost
+# after an intentional CLI layout or seed change:
+UPDATE_REFS=1 ./cli/tests/run_tests.sh ./cli/build/githost
 ```
 
-CI (`.github/workflows/ci.yml`) runs the same build + `run_tests.sh` on every
-PR and push to `main` (Ubuntu, Ninja, libcurl).
+Optional env:
+
+| Variable | Meaning |
+|---|---|
+| `GITHOST_TEST_PORT` | wrangler port (default `8799`) |
+| `SKIP_SEED=1` | reuse existing local D1 |
+| `SKIP_WRANGLER=1` | use an already-running Worker on that port |
+| `UPDATE_REFS=1` | rewrite golden files |
 
 Why full-output references rather than field-by-field asserts?
 
 - Grouping, sort order, truncation, and the 80-column grid are the product.
 - A single diff catches regressions that partial asserts miss.
-- Fixtures are small and hand-written, so failures are readable.
+- Hitting the real `/api/prs` means Worker serialization changes break CLI CI.
+
+CI (`.github/workflows/ci.yml` job `cli`) runs the same path on every PR and
+push to `main`.
 
 ## Layout
 
@@ -84,10 +94,8 @@ cli/
   corec/               # vendored certik/corec (base + platform)
   CMakeLists.txt
   tests/
-    fixtures/api_prs.json
     reference/         # golden stdout
-    serve_fixture.py
-    run_tests.sh
+    run_tests.sh       # seed + wrangler + diff
 ```
 
 Update corec by re-copying `base/` and `platform/` from
