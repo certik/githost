@@ -7,6 +7,9 @@
 #include "githost.h"
 #include "out.h"
 
+#include <base/numconv.h>
+#include <platform/platform.h>
+
 #include <curl/curl.h>
 
 void gh_http_global_init(void)
@@ -68,11 +71,28 @@ static size_t write_cb(char *ptr, size_t size, size_t nmemb, void *userdata)
     return n;
 }
 
-int gh_http_get(Arena *arena, const char *url, gh_buf *out, long *http_code)
+/* Build Cookie header value: accept raw session id or full "gh_session=…". */
+static void cookie_header(const char *cookie, char *buf, size_t buflen)
+{
+    if (!cookie || !cookie[0]) {
+        buf[0] = '\0';
+        return;
+    }
+    if (base_strstr(cookie, "gh_session=") != NULL) {
+        base_snprintf(buf, buflen, "%s", cookie);
+    } else {
+        base_snprintf(buf, buflen, "gh_session=%s", cookie);
+    }
+}
+
+static int http_perform(Arena *arena, const char *url, const char *cookie,
+                        const char *post_json, gh_buf *out, long *http_code)
 {
     CURL *curl;
     CURLcode rc;
     long code = 0;
+    char cookie_buf[512];
+    struct curl_slist *headers = NULL;
 
     if (http_code) {
         *http_code = 0;
@@ -88,12 +108,27 @@ int gh_http_get(Arena *arena, const char *url, gh_buf *out, long *http_code)
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT,
-                     "githost/" GITHOST_VERSION " (lfortran)");
+                     "githost/" GITHOST_VERSION);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, out);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
 
+    if (cookie && cookie[0]) {
+        cookie_header(cookie, cookie_buf, sizeof(cookie_buf));
+        curl_easy_setopt(curl, CURLOPT_COOKIE, cookie_buf);
+    }
+
+    if (post_json) {
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_json);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)base_strlen(post_json));
+    }
+
     rc = curl_easy_perform(curl);
+    if (headers) {
+        curl_slist_free_all(headers);
+    }
     if (rc != CURLE_OK) {
         gh_eprintf("githost: HTTP request failed: %s\n",
                    curl_easy_strerror(rc));
@@ -122,6 +157,75 @@ int gh_http_get(Arena *arena, const char *url, gh_buf *out, long *http_code)
         }
         out->data[0] = '\0';
         out->len = 0;
+    }
+    return 0;
+}
+
+int gh_http_get(Arena *arena, const char *url, gh_buf *out, long *http_code)
+{
+    return http_perform(arena, url, NULL, NULL, out, http_code);
+}
+
+int gh_http_get_auth(Arena *arena, const char *url, const char *cookie,
+                     gh_buf *out, long *http_code)
+{
+    return http_perform(arena, url, cookie, NULL, out, http_code);
+}
+
+int gh_http_post_json(Arena *arena, const char *url, const char *cookie,
+                      const char *json_body, gh_buf *out, long *http_code)
+{
+    return http_perform(arena, url, cookie, json_body, out, http_code);
+}
+
+int gh_read_file(Arena *arena, const char *path, char **out, size_t *out_len)
+{
+    platform_fd_t fd;
+    size_t cap = 4096;
+    size_t len = 0;
+    char *buf;
+    iovec_t iov;
+    size_t nread;
+    int rc;
+
+    if (out_len) {
+        *out_len = 0;
+    }
+    *out = NULL;
+
+    fd = platform_path_open(path, base_strlen(path), PLATFORM_RIGHTS_READ, 0);
+    if (fd < 0) {
+        gh_eprintf("githost: cannot open %s\n", path);
+        return -1;
+    }
+
+    buf = (char *)arena_alloc(arena, cap);
+    for (;;) {
+        if (len + 1024 >= cap) {
+            size_t ncap = cap * 2;
+            char *nbuf = (char *)gh_arena_grow(arena, buf, len, ncap, 1);
+            buf = nbuf;
+            cap = ncap;
+        }
+        iov.iov_base = buf + len;
+        iov.iov_len = cap - len - 1;
+        nread = 0;
+        rc = platform_fd_read(fd, &iov, 1, &nread);
+        if (rc != 0) {
+            platform_fd_close(fd);
+            gh_eprintf("githost: read failed for %s\n", path);
+            return -1;
+        }
+        if (nread == 0) {
+            break;
+        }
+        len += nread;
+    }
+    platform_fd_close(fd);
+    buf[len] = '\0';
+    *out = buf;
+    if (out_len) {
+        *out_len = len;
     }
     return 0;
 }

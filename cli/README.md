@@ -35,13 +35,30 @@ Requirements: CMake ≥ 3.16, a C99 compiler, libcurl.
 ./build/githost --url http://127.0.0.1:9XXX pr list --passed
 ```
 
-Local review stubs (upload not implemented yet):
+### Local reviews (any agent)
+
+githost does **not** call AI APIs. Agents only write a JSON file.
+
+**One command** (shared instructions for Claude / Grok / Copilot / Codex / Pi):
 
 ```bash
-./build/githost review init 12028
-./build/githost review path 12028
+./cli/bin/githost-review 12028                 # auto-picks first agent on PATH
+./cli/bin/githost-review 12028 --agent claude --submit
 ```
 
+Manual:
+
+```bash
+githost review schema
+githost review init 12028
+# …agent writes githost.review/v1 JSON…
+export GITHOST_SESSION='…'
+githost review submit 12028 --file review.v1.json
+githost review list 12028
+```
+
+Details: [`docs/REVIEW.md`](docs/REVIEW.md),  
+shared prompt: [`agents/REVIEW_INSTRUCTIONS.md`](agents/REVIEW_INSTRUCTIONS.md).
 ## Tests (reference diffs against the real Worker)
 
 CLI output is snapshot-tested against the **actual local Worker + D1**, not a

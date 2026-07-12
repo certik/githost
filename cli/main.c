@@ -17,7 +17,7 @@ static void usage(void)
         "Commands:\n"
         "  pr list          List open PRs grouped like the web UI\n"
         "  pr view <n>      Show details for PR number <n>\n"
-        "  review           Local review helpers (stub for future upload)\n"
+        "  review           Local review upload (agent-agnostic JSON)\n"
         "  help             Show this help\n"
         "  version          Show version\n"
         "\n"
@@ -39,16 +39,24 @@ static void usage(void)
         "  quick-running | quick-queued | quick-skipped | quick-failed\n"
         "  other | <numeric key 0,1,2,...>\n"
         "\n"
-        "Review workflow (future):\n"
-        "  githost review path <n>     Print local review file path\n"
-        "  githost review init <n>     Create a local review stub\n"
-        "  githost review submit <n>   Upload (not implemented yet)\n"
+        "Review workflow (any agent):\n"
+        "  1. githost pr view <n>\n"
+        "  2. Agent writes githost.review/v1 JSON (see cli/docs/REVIEW.md)\n"
+        "  3. githost review submit <n> --file review.v1.json\n"
+        "     (auth: GITHOST_SESSION=… or ~/.githost/session)\n"
+        "  4. Review appears in the web UI under local reviews\n"
+        "\n"
+        "  githost review init <n>              Write a JSON template\n"
+        "  githost review submit <n> --file f   POST review to the server\n"
+        "  githost review list <n>              List local reviews (auth)\n"
+        "  githost review schema                Print the JSON schema blurb\n"
         "\n"
         "Examples:\n"
         "  githost\n"
         "  githost pr list --passed\n"
         "  githost pr list --group conflict\n"
-        "  githost pr view 12028\n",
+        "  githost pr view 12028\n"
+        "  githost review submit 12028 --file review.v1.json\n",
         GITHOST_DEFAULT_URL, GITHOST_DEFAULT_URL);
 }
 
@@ -184,53 +192,29 @@ static int cmd_pr_view(Arena *arena, const char *base_url, int argc, char **argv
     return 1;
 }
 
-static void review_path(Arena *arena, int number, char *buf, size_t buflen)
+static void review_default_path(Arena *arena, int number, char *buf,
+                                size_t buflen)
 {
     const char *home = gh_getenv(arena, "HOME");
     if (!home) {
         home = ".";
     }
-    base_snprintf(buf, buflen, "%s/.githost/reviews/%d.md", home, number);
+    base_snprintf(buf, buflen, "%s/.githost/reviews/%d.v1.json", home, number);
 }
 
-static int write_review_file(const char *path, int number)
+static int write_bytes(const char *path, const char *data, size_t len)
 {
     platform_fd_t fd;
-    char body[1024];
-    int n;
     size_t nwritten;
     ciovec_t iov;
-
-    n = base_snprintf(
-        body, sizeof(body),
-        "# Review for PR #%d\n"
-        "\n"
-        "<!-- Written by githost " GITHOST_VERSION " -->\n"
-        "<!-- Upload with: githost review submit %d (coming soon) -->\n"
-        "\n"
-        "## Summary\n"
-        "\n"
-        "\n"
-        "## Verdict\n"
-        "\n"
-        "- [ ] Approve\n"
-        "- [ ] Request changes\n"
-        "- [ ] Comment only\n"
-        "\n"
-        "## Notes\n"
-        "\n",
-        number, number);
-    if (n < 0) {
-        return -1;
-    }
 
     fd = platform_path_open(path, base_strlen(path), PLATFORM_RIGHTS_WRITE,
                             PLATFORM_O_CREAT | PLATFORM_O_TRUNC);
     if (fd < 0) {
         return -1;
     }
-    iov.buf = body;
-    iov.buf_len = (size_t)n;
+    iov.buf = data;
+    iov.buf_len = len;
     if (platform_fd_write(fd, &iov, 1, &nwritten) != 0) {
         platform_fd_close(fd);
         return -1;
@@ -239,22 +223,203 @@ static int write_review_file(const char *path, int number)
     return 0;
 }
 
-static int cmd_review(Arena *arena, int argc, char **argv)
+static int write_review_template(const char *path, int number)
+{
+    char body[1024];
+    int n;
+
+    n = base_snprintf(
+        body, sizeof(body),
+        "{\n"
+        "  \"schema\": \"githost.review/v1\",\n"
+        "  \"pr\": %d,\n"
+        "  \"headSha\": \"REPLACE_WITH_PR_HEAD_SHA\",\n"
+        "  \"verdict\": \"COMMENT\",\n"
+        "  \"summary\": \"Overall assessment in markdown.\\n\\n\",\n"
+        "  \"comments\": [\n"
+        "    {\n"
+        "      \"path\": \"path/to/file.ext\",\n"
+        "      \"line\": 1,\n"
+        "      \"body\": \"Inline comment in markdown.\"\n"
+        "    }\n"
+        "  ],\n"
+        "  \"meta\": {\n"
+        "    \"model\": \"agent-or-human-name\"\n"
+        "  }\n"
+        "}\n",
+        number);
+    if (n < 0) {
+        return -1;
+    }
+    return write_bytes(path, body, (size_t)n);
+}
+
+/* Session cookie for authenticated API calls. */
+static const char *load_session(Arena *arena)
+{
+    const char *env = gh_getenv(arena, "GITHOST_SESSION");
+    char path[512];
+    char *data = NULL;
+    const char *home;
+
+    if (env && env[0]) {
+        return env;
+    }
+    home = gh_getenv(arena, "HOME");
+    if (!home) {
+        return NULL;
+    }
+    base_snprintf(path, sizeof(path), "%s/.githost/session", home);
+    if (gh_read_file(arena, path, &data, NULL) != 0 || !data || !data[0]) {
+        return NULL;
+    }
+    /* Trim trailing whitespace/newlines. */
+    {
+        size_t n = base_strlen(data);
+        while (n > 0 && (data[n - 1] == '\n' || data[n - 1] == '\r' ||
+                         data[n - 1] == ' ' || data[n - 1] == '\t')) {
+            data[--n] = '\0';
+        }
+    }
+    return data[0] ? data : NULL;
+}
+
+static void join_url(char *buf, size_t buflen, const char *base, const char *path)
+{
+    size_t n = base_strlen(base);
+    if (n > 0 && base[n - 1] == '/') {
+        base_snprintf(buf, buflen, "%s%s", base, path[0] == '/' ? path + 1 : path);
+    } else {
+        base_snprintf(buf, buflen, "%s%s", base, path);
+    }
+}
+
+/* Minimal check that the document looks like githost.review/v1. */
+static int review_json_sanity(const char *json, int expected_pr)
+{
+    if (!json || json[0] != '{') {
+        gh_eprintf("githost: review file must be a JSON object\n");
+        return -1;
+    }
+    if (base_strstr(json, "headSha") == NULL &&
+        base_strstr(json, "\"head_sha\"") == NULL) {
+        gh_eprintf("githost: review JSON must include headSha\n");
+        return -1;
+    }
+    (void)expected_pr;
+    return 0;
+}
+
+static void print_review_schema(void)
+{
+    gh_print(
+        "{\n"
+        "  \"schema\": \"githost.review/v1\",\n"
+        "  \"pr\": 12028,\n"
+        "  \"headSha\": \"<commit sha of the PR head>\",\n"
+        "  \"verdict\": \"COMMENT | APPROVE | REQUEST_CHANGES\",\n"
+        "  \"summary\": \"Main review body (markdown)\",\n"
+        "  \"comments\": [\n"
+        "    { \"path\": \"file.ext\", \"line\": 42, \"body\": \"…\" },\n"
+        "    { \"path\": \"file.ext\", \"startLine\": 10, \"line\": 18,\n"
+        "      \"side\": \"RIGHT\", \"body\": \"multi-line …\" }\n"
+        "  ],\n"
+        "  \"meta\": { \"model\": \"any-agent-or-human\" }\n"
+        "}\n");
+}
+
+static int cmd_review_submit(Arena *arena, const char *base_url, int number,
+                             const char *file_path)
+{
+    const char *session;
+    char *json = NULL;
+    char url[1024];
+    char pathbuf[64];
+    gh_buf resp;
+    long code = 0;
+
+    if (!file_path || !file_path[0]) {
+        gh_eprintf("githost: review submit requires --file <path>\n");
+        return 2;
+    }
+    session = load_session(arena);
+    if (!session) {
+        gh_eprintf(
+            "githost: not authenticated.\n"
+            "  Set GITHOST_SESSION to your gh_session cookie value, or write\n"
+            "  it to ~/.githost/session (session id only is fine).\n"
+            "  Local: open /auth/dev-login then copy the gh_session cookie.\n");
+        return 1;
+    }
+    if (gh_read_file(arena, file_path, &json, NULL) != 0) {
+        return 1;
+    }
+    if (review_json_sanity(json, number) != 0) {
+        return 1;
+    }
+
+    base_snprintf(pathbuf, sizeof(pathbuf), "/api/prs/%d/reviews", number);
+    join_url(url, sizeof(url), base_url, pathbuf);
+
+    if (gh_http_post_json(arena, url, session, json, &resp, &code) != 0) {
+        return 1;
+    }
+    gh_printf("Uploaded review for PR #%d (HTTP %ld)\n", number, code);
+    if (resp.data && resp.len > 0) {
+        gh_printf("%s\n", resp.data);
+    }
+    return 0;
+}
+
+static int cmd_review_list(Arena *arena, const char *base_url, int number)
+{
+    const char *session;
+    char url[1024];
+    char pathbuf[64];
+    gh_buf resp;
+    long code = 0;
+
+    session = load_session(arena);
+    if (!session) {
+        gh_eprintf("githost: not authenticated (GITHOST_SESSION / ~/.githost/session)\n");
+        return 1;
+    }
+    base_snprintf(pathbuf, sizeof(pathbuf), "/api/prs/%d", number);
+    join_url(url, sizeof(url), base_url, pathbuf);
+    if (gh_http_get_auth(arena, url, session, &resp, &code) != 0) {
+        return 1;
+    }
+    gh_printf("%s\n", resp.data ? resp.data : "");
+    return 0;
+}
+
+static int cmd_review(Arena *arena, const char *base_url, int argc, char **argv)
 {
     char path[1024];
-    int number;
+    int number = -1;
     const char *sub;
+    const char *file_path = NULL;
+    int i;
 
     if (argc < 1) {
         gh_eprintf(
-            "githost review — local reviews (upload not implemented yet)\n"
+            "githost review — local reviews (agent-agnostic JSON)\n"
             "\n"
-            "  githost review path <n>\n"
+            "  githost review schema\n"
             "  githost review init <n>\n"
-            "  githost review submit <n>   (stub)\n");
+            "  githost review submit <n> --file review.v1.json\n"
+            "  githost review list <n>\n"
+            "  githost review path <n>\n");
         return 2;
     }
     sub = argv[0];
+
+    if (base_strcmp(sub, "schema") == 0) {
+        print_review_schema();
+        return 0;
+    }
+
+    /* Remaining subcommands need a PR number as argv[1]. */
     if (argc < 2) {
         gh_eprintf("githost: review %s requires a PR number\n", sub);
         return 2;
@@ -264,33 +429,50 @@ static int cmd_review(Arena *arena, int argc, char **argv)
         gh_eprintf("githost: invalid PR number: %s\n", argv[1]);
         return 2;
     }
-    review_path(arena, number, path, sizeof(path));
+
+    for (i = 2; i < argc; i++) {
+        if (base_strcmp(argv[i], "--file") == 0 ||
+            base_strcmp(argv[i], "-f") == 0) {
+            if (i + 1 >= argc) {
+                gh_eprintf("githost: --file requires a path\n");
+                return 2;
+            }
+            file_path = argv[++i];
+        } else {
+            gh_eprintf("githost: unknown option: %s\n", argv[i]);
+            return 2;
+        }
+    }
+
+    review_default_path(arena, number, path, sizeof(path));
 
     if (base_strcmp(sub, "path") == 0) {
         gh_printf("%s\n", path);
         return 0;
     }
     if (base_strcmp(sub, "init") == 0) {
-        if (write_review_file(path, number) != 0) {
-            /* Fallback: cwd file if ~/.githost/reviews does not exist. */
-            base_snprintf(path, sizeof(path), "githost-review-%d.md", number);
-            if (write_review_file(path, number) != 0) {
+        if (write_review_template(path, number) != 0) {
+            base_snprintf(path, sizeof(path), "review-%d.v1.json", number);
+            if (write_review_template(path, number) != 0) {
                 gh_eprintf(
-                    "githost: failed to write review file (create "
-                    "~/.githost/reviews or use cwd)\n");
+                    "githost: failed to write review template "
+                    "(create ~/.githost/reviews or use cwd)\n");
                 return 1;
             }
         }
         gh_printf("Created %s\n", path);
+        gh_printf("Edit the file (any agent), then:\n");
+        gh_printf("  githost review submit %d --file %s\n", number, path);
         return 0;
     }
     if (base_strcmp(sub, "submit") == 0) {
-        gh_eprintf(
-            "githost: review submit is not implemented yet.\n"
-            "  Local file would be: %s\n"
-            "  Future: POST to the githost API so the review appears online.\n",
-            path);
-        return 1;
+        if (!file_path) {
+            file_path = path; /* default path if --file omitted */
+        }
+        return cmd_review_submit(arena, base_url, number, file_path);
+    }
+    if (base_strcmp(sub, "list") == 0) {
+        return cmd_review_list(arena, base_url, number);
     }
 
     gh_eprintf("githost: unknown review subcommand: %s\n", sub);
@@ -379,7 +561,7 @@ int main(int argc, char **argv)
     }
     if (base_strcmp(argv[i], "review") == 0) {
         i++;
-        rc = cmd_review(arena, argc - i, argv + i);
+        rc = cmd_review(arena, base_url, argc - i, argv + i);
         goto done;
     }
 

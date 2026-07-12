@@ -1,0 +1,17 @@
+{
+  "schema": "githost.review/v1",
+  "pr": 1001,
+  "headSha": "sha-101",
+  "verdict": "COMMENT",
+  "summary": "CLI reference review for seeded PR #1001.\n\nLooks good for the test harness.",
+  "comments": [
+    {
+      "path": "src/example.f90",
+      "line": 10,
+      "body": "Nit: consider a clearer name here."
+    }
+  ],
+  "meta": {
+    "model": "cli-test-agent"
+  }
+}

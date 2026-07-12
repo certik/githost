@@ -1,0 +1,303 @@
+#!/usr/bin/env bash
+# githost-review — one entry point to review a PR with any supported agent.
+#
+#   githost-review 12028
+#   githost-review 12028 --agent claude --submit
+#   githost-review 12028 --agent auto
+#   githost-review 12028 --print-prompt
+#
+# Agents share cli/agents/REVIEW_INSTRUCTIONS.md. githost never calls model
+# APIs itself — this script only launches the tool you already have installed.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CLI_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$CLI_ROOT/.." && pwd)"
+INSTRUCTIONS="$CLI_ROOT/agents/REVIEW_INSTRUCTIONS.md"
+
+# Default preference when --agent auto (first installed wins).
+DEFAULT_AGENT_ORDER="${GITHOST_AGENT_ORDER:-claude,grok,copilot,codex,pi}"
+
+usage() {
+  cat <<'EOF'
+githost-review — run any coding agent to produce a githost.review/v1 JSON file
+
+Usage:
+  githost-review <pr-number> [options]
+
+Options:
+  --agent <name>     claude | grok | copilot | codex | pi | auto
+                     (default: $GITHOST_AGENT or auto)
+  --submit           After the agent finishes, run: githost review submit
+  --out <path>       Output JSON path (default: .githost/reviews/<n>.v1.json)
+  --url <base>       githost API base for submit (default: production or $GITHOST_URL)
+  --repo <owner/name>
+                     GitHub repo for gh pr view/diff (default: $GITHOST_REPO
+                     or UPSTREAM_OWNER/UPSTREAM_REPO from wrangler.toml)
+  --print-prompt     Print the filled prompt and exit (no agent)
+  --dry-run          Show which agent would run and the command, then exit
+  -h, --help         Show this help
+
+Environment:
+  GITHOST_AGENT          Default agent (same as --agent)
+  GITHOST_AGENT_ORDER    Comma list for auto (default: claude,grok,copilot,codex,pi)
+  GITHOST_SESSION        Session cookie for --submit
+  GITHOST_URL            API base URL for --submit
+  GITHOST_BIN            Path to githost binary (default: cli/build/githost or PATH)
+  GITHOST_REPO           owner/name for gh (e.g. lfortran/lfortran)
+
+Examples:
+  githost-review 12028
+  githost-review 12028 --agent copilot
+  githost-review 12028 --agent claude --submit
+  GITHOST_AGENT=pi githost-review 12028 --submit
+EOF
+}
+
+die() { echo "githost-review: $*" >&2; exit 1; }
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+resolve_agent() {
+  local want="$1"
+  local a
+  if [[ "$want" != "auto" ]]; then
+    have "$want" || die "agent '$want' not found on PATH"
+    echo "$want"
+    return
+  fi
+  IFS=',' read -r -a order <<<"$DEFAULT_AGENT_ORDER"
+  for a in "${order[@]}"; do
+    a="$(echo "$a" | tr -d '[:space:]')"
+    if have "$a"; then
+      echo "$a"
+      return
+    fi
+  done
+  die "no supported agent on PATH (tried: $DEFAULT_AGENT_ORDER)"
+}
+
+find_githost_bin() {
+  if [[ -n "${GITHOST_BIN:-}" && -x "${GITHOST_BIN}" ]]; then
+    echo "$GITHOST_BIN"
+    return
+  fi
+  if [[ -x "$CLI_ROOT/build/githost" ]]; then
+    echo "$CLI_ROOT/build/githost"
+    return
+  fi
+  if have githost; then
+    command -v githost
+    return
+  fi
+  echo ""
+}
+
+# --- args ---
+PR=""
+AGENT="${GITHOST_AGENT:-auto}"
+SUBMIT=0
+OUT=""
+URL="${GITHOST_URL:-}"
+REPO="${GITHOST_REPO:-}"
+PRINT_PROMPT=0
+DRY_RUN=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --agent) AGENT="${2:-}"; shift 2 ;;
+    --submit) SUBMIT=1; shift ;;
+    --out) OUT="${2:-}"; shift 2 ;;
+    --url) URL="${2:-}"; shift 2 ;;
+    --repo) REPO="${2:-}"; shift 2 ;;
+    --print-prompt) PRINT_PROMPT=1; shift ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    -*)
+      die "unknown option: $1"
+      ;;
+    *)
+      if [[ -z "$PR" ]]; then
+        PR="$1"
+        shift
+      else
+        die "unexpected argument: $1"
+      fi
+      ;;
+  esac
+done
+
+[[ -n "$PR" ]] || { usage; exit 2; }
+[[ "$PR" =~ ^[0-9]+$ ]] || die "PR number must be an integer"
+[[ -f "$INSTRUCTIONS" ]] || die "missing $INSTRUCTIONS"
+
+OUT="${OUT:-$REPO_ROOT/.githost/reviews/${PR}.v1.json}"
+mkdir -p "$(dirname "$OUT")"
+
+# --- Resolve owner/repo for gh ---
+if [[ -z "$REPO" ]]; then
+  # Prefer wrangler.toml [vars] UPSTREAM_* when running from the githost project.
+  if [[ -f "$REPO_ROOT/wrangler.toml" ]]; then
+    REPO="$(python3 - "$REPO_ROOT/wrangler.toml" <<'PY'
+import re, sys
+text = open(sys.argv[1], encoding="utf-8").read()
+m = re.search(r"(?m)^\[vars\]\s*\n(.*?)(?=\n\[|\Z)", text, re.S)
+if not m:
+    sys.exit(0)
+sec = m.group(1)
+o = re.search(r'(?m)^UPSTREAM_OWNER\s*=\s*"([^"]+)"', sec)
+r = re.search(r'(?m)^UPSTREAM_REPO\s*=\s*"([^"]+)"', sec)
+if o and r:
+    print(f"{o.group(1)}/{r.group(1)}")
+PY
+)"
+  fi
+fi
+if [[ -z "$REPO" ]]; then
+  REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)"
+fi
+[[ -n "$REPO" ]] || die "could not resolve GitHub repo (set --repo owner/name or GITHOST_REPO)"
+
+# --- PR metadata via gh ---
+have gh || die "gh (GitHub CLI) is required to resolve PR head SHA and metadata"
+
+GH=(gh pr view "$PR" --repo "$REPO")
+HEAD_SHA="$("${GH[@]}" --json headRefOid -q .headRefOid 2>/dev/null || true)"
+[[ -n "$HEAD_SHA" ]] || die "could not resolve head SHA for $REPO#$PR (gh pr view failed)"
+
+TITLE="$("${GH[@]}" --json title -q .title 2>/dev/null || echo "")"
+URL_PR="$("${GH[@]}" --json url -q .url 2>/dev/null || echo "https://github.com/${REPO}/pull/${PR}")"
+
+# --- Build task prompt (shared across agents) ---
+TASK="$(cat <<EOF
+## Task
+
+Review GitHub pull request **#${PR}** in **${REPO}**.
+
+- Title: ${TITLE}
+- URL: ${URL_PR}
+- headSha (must appear in JSON as-is): ${HEAD_SHA}
+- OUT_PATH (write the review JSON here only): ${OUT}
+
+Follow the system / shared review instructions you were given (githost.review/v1).
+
+Steps:
+1. Gather context with:
+   \`gh pr view ${PR} --repo ${REPO}\`
+   \`gh pr diff ${PR} --repo ${REPO}\`
+   (and read files as needed).
+2. Write a single valid JSON document to: ${OUT}
+3. Do not submit the review yourself.
+4. When done, print a one-line confirmation that ${OUT} was written.
+
+meta.model should identify you (e.g. "${AGENT}").
+EOF
+)"
+
+FULL_PROMPT="$(cat <<EOF
+$(cat "$INSTRUCTIONS")
+
+---
+
+$TASK
+EOF
+)"
+
+if [[ "$PRINT_PROMPT" == "1" ]]; then
+  printf '%s\n' "$FULL_PROMPT"
+  exit 0
+fi
+
+AGENT_NAME="$(resolve_agent "$AGENT")"
+echo "githost-review: PR #${PR}  agent=${AGENT_NAME}  out=${OUT}"
+echo "githost-review: headSha=${HEAD_SHA}"
+
+# --- Per-agent invocation ---
+# All agents get the same instructions; flags differ only for non-interactive UX.
+run_agent() {
+  local name="$1"
+  case "$name" in
+    claude)
+      # -p non-interactive; skip permissions so it can write OUT_PATH
+      claude -p \
+        --dangerously-skip-permissions \
+        --append-system-prompt "$(cat "$INSTRUCTIONS")" \
+        "$TASK"
+      ;;
+    grok)
+      grok --print --always-approve \
+        --system-prompt-override "$(cat "$INSTRUCTIONS")" \
+        "$TASK"
+      ;;
+    copilot)
+      # Copilot has no separate system-prompt file flag; embed shared instructions.
+      copilot -p "$FULL_PROMPT" \
+        --allow-all-tools \
+        --allow-all-paths \
+        --silent
+      ;;
+    codex)
+      # Prefer full-auto sandboxed exec; feed combined prompt on stdin.
+      printf '%s\n' "$FULL_PROMPT" | codex exec --full-auto -
+      ;;
+    pi)
+      pi -p \
+        --append-system-prompt "$INSTRUCTIONS" \
+        "$TASK"
+      ;;
+    *)
+      die "internal: unknown agent $name"
+      ;;
+  esac
+}
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  echo "githost-review: dry-run — would invoke agent '$AGENT_NAME'"
+  echo "githost-review: OUT_PATH=$OUT"
+  exit 0
+fi
+
+run_agent "$AGENT_NAME"
+
+if [[ ! -f "$OUT" ]]; then
+  die "agent finished but $OUT was not created"
+fi
+
+# Basic JSON sanity (python is always available in this repo's toolchain)
+python3 - "$OUT" "$PR" "$HEAD_SHA" <<'PY'
+import json, sys
+path, pr, sha = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+with open(path, encoding="utf-8") as f:
+    raw = f.read().strip()
+# Tolerate accidental markdown fences
+if raw.startswith("```"):
+    lines = raw.splitlines()
+    if lines[0].startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    raw = "\n".join(lines)
+    open(path, "w", encoding="utf-8").write(raw + ("\n" if not raw.endswith("\n") else ""))
+doc = json.loads(raw)
+assert doc.get("schema") in (None, "githost.review/v1"), doc.get("schema")
+assert "headSha" in doc and doc["headSha"], "headSha missing"
+if doc.get("pr") is not None:
+    assert int(doc["pr"]) == pr, f"pr mismatch {doc.get('pr')} != {pr}"
+print(f"githost-review: validated {path} (verdict={doc.get('verdict')!r}, comments={len(doc.get('comments') or [])})")
+PY
+
+echo "githost-review: wrote $OUT"
+
+if [[ "$SUBMIT" == "1" ]]; then
+  GH_BIN="$(find_githost_bin)"
+  [[ -n "$GH_BIN" ]] || die "githost binary not found (build cli/ or set GITHOST_BIN)"
+  args=(review submit "$PR" --file "$OUT")
+  if [[ -n "$URL" ]]; then
+    "$GH_BIN" --url "$URL" "${args[@]}"
+  else
+    "$GH_BIN" "${args[@]}"
+  fi
+  echo "githost-review: submitted PR #${PR}"
+else
+  echo "githost-review: next: githost review submit ${PR} --file ${OUT}"
+fi

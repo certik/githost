@@ -19,6 +19,9 @@ drizzle/
 # Local backups
 backups/
 
+# Local CLI reviews / session (never commit)
+.githost/
+
 # Logs
 *.log
 npm-debug.log*

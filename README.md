@@ -118,15 +118,17 @@ npm run db:apply:mirror:remote
 npm install                     # one-time
 cp .dev.vars.example .dev.vars  # one-time — already has DEV_LOGIN_ENABLED=true
 npm run dev:seed                # apply migrations + insert fixture PRs/test runs
-npm run dev                     # wrangler (8787) + vite (5173), concurrently
+npm run dev                     # rebuilds web/dist, then wrangler (8787) + vite (5173)
 ```
 
 Open one of:
 
-- **http://localhost:8787/auth/dev-login** — wrangler dev only, served with the
-  built SPA at `web/dist/`. Sets a session cookie and redirects to `/`.
-- **http://localhost:5173/auth/dev-login** — Vite dev with hot-reload; Vite
-  proxies `/api`, `/auth`, `/webhook`, `/healthz` to wrangler on 8787.
+- **http://localhost:5173** — **preferred for UI work** (Vite HMR, live `web/src`).
+  Vite proxies `/api`, `/auth`, `/webhook`, `/healthz` to wrangler on 8787.
+  Sign-in: http://localhost:5173/auth/dev-login
+- **http://localhost:8787** — Worker + **last** `web/dist` build (not HMR).
+  After SPA changes, run `npm run build` (or restart `npm run dev`) or you will
+  see a stale UI. Sign-in: http://localhost:8787/auth/dev-login
 
 The `dev-login` endpoint bypasses GitHub OAuth and creates an `app_user` named
 `dev` (override with `?login=alice`). It is **only enabled when**
@@ -166,6 +168,17 @@ UPDATE_REFS=1 ./cli/tests/run_tests.sh ./cli/build/githost   # refresh goldens
 ```
 
 See [`cli/README.md`](cli/README.md) for env vars and more commands.
+
+**Local reviews (agent-agnostic):** one launcher, shared instructions for every
+agent CLI:
+
+```bash
+npm run review -- 12028                      # or: ./cli/bin/githost-review 12028
+npm run review -- 12028 --agent claude --submit
+```
+
+Supported agents: **claude**, **grok**, **copilot**, **codex**, **pi** (or
+`--agent auto`). Spec: [`cli/docs/REVIEW.md`](cli/docs/REVIEW.md).
 
 ### Fixture data
 
