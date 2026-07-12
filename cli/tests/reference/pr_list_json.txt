@@ -13,7 +13,8 @@
       "priority": 0,
       "priorityLabel": "Quick + Exhaustive passed",
       "quickTest": "passed",
-      "exhaustiveTest": "passed"
+      "exhaustiveTest": "passed",
+      "localReview": { "verdict": "COMMENT" }
     },
     {
       "number": 1007,
@@ -28,7 +29,8 @@
       "priority": 0,
       "priorityLabel": "Quick + Exhaustive passed",
       "quickTest": "passed",
-      "exhaustiveTest": "passed"
+      "exhaustiveTest": "passed",
+      "localReview": { "verdict": "APPROVE" }
     },
     {
       "number": 1013,
@@ -43,7 +45,8 @@
       "priority": 0,
       "priorityLabel": "Quick + Exhaustive passed",
       "quickTest": "passed",
-      "exhaustiveTest": "passed"
+      "exhaustiveTest": "passed",
+      "localReview": null
     }
   ],
   "count": 3

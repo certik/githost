@@ -4,56 +4,56 @@ READY FOR REVIEW
 
 Quick + Exhaustive passed (3)
 ────────────────────────────────────────────────────────────────────────────────
-  #       TITLE                                          AUTHOR        AGE M Q E
-  #1001   CI-green and mergeable: add feature X          alice         now ✓ ✓ ✓
-  #1007   CI-green: tidy typo                            carol          0m ✓ ✓ ✓
-  #1013   CI-green, mergeable unknown (still computing)  bob            1m ? ✓ ✓
+  #       TITLE                                        AUTHOR        AGE M R Q E
+  #1001   CI-green and mergeable: add feature X        alice         now ✓ ○ ✓ ✓
+  #1007   CI-green: tidy typo                          carol          0m ✓ ✓ ✓ ✓
+  #1013   CI-green, mergeable unknown (still comput... bob            1m ? · ✓ ✓
 
 Quick + Exhaustive passed (merge conflict) (2)
 ────────────────────────────────────────────────────────────────────────────────
-  #       TITLE                                          AUTHOR        AGE M Q E
-  #1014   CI-green but conflicts with main — rebase... alice          1m ! ✓ ✓
-  #1015   Another CI-green merge conflict                carol          1m ! ✓ ✓
+  #       TITLE                                        AUTHOR        AGE M R Q E
+  #1014   CI-green but conflicts with main — reba... alice          1m ! · ✓ ✓
+  #1015   Another CI-green merge conflict              carol          1m ! · ✓ ✓
 
 Quick passed · Exhaustive running (1)
 ────────────────────────────────────────────────────────────────────────────────
-  #       TITLE                                          AUTHOR        AGE M Q E
-  #1008   New backend pass — exhaustive in flight      alice          1m ✓ ✓ ◉
+  #       TITLE                                        AUTHOR        AGE M R Q E
+  #1008   New backend pass — exhaustive in flight    alice          1m ✓ · ✓ ◉
 
 Quick passed · Exhaustive queued (1)
 ────────────────────────────────────────────────────────────────────────────────
-  #       TITLE                                          AUTHOR        AGE M Q E
-  #1009   Quick green; exhaustive queued                 bob            2m ✓ ✓ ●
+  #       TITLE                                        AUTHOR        AGE M R Q E
+  #1009   Quick green; exhaustive queued               bob            2m ✓ · ✓ ●
 
 Quick passed · Exhaustive skipped (1)
 ────────────────────────────────────────────────────────────────────────────────
-  #       TITLE                                          AUTHOR        AGE M Q E
-  #1003   Skips exhaustive + has conflicts               alice          3m ! ✓ –
+  #       TITLE                                        AUTHOR        AGE M R Q E
+  #1003   Skips exhaustive + has conflicts             alice          3m ! · ✓ –
 
 Quick passed · Exhaustive failed (1)
 ────────────────────────────────────────────────────────────────────────────────
-  #       TITLE                                          AUTHOR        AGE M Q E
-  #1010   Exhaustive regressed; quick still green        carol          4m ✓ ✓ ✗
+  #       TITLE                                        AUTHOR        AGE M R Q E
+  #1010   Exhaustive regressed; quick still green      carol          4m ✓ · ✓ ✗
 
 Quick running (1)
 ────────────────────────────────────────────────────────────────────────────────
-  #       TITLE                                          AUTHOR        AGE M Q E
-  #1002   Quick still running; mergeable computing       bob            5m ? ◉ ○
+  #       TITLE                                        AUTHOR        AGE M R Q E
+  #1002   Quick still running; mergeable computing     bob            5m ? · ◉ ○
 
 Quick queued / not run (2)
 ────────────────────────────────────────────────────────────────────────────────
-  #       TITLE                                          AUTHOR        AGE M Q E
-  #1005   Just pushed; quick queued                      carol          6m ✓ ● ○
-  #1006   No CI rows yet + has conflicts                 carol          7m ! ○ ○
+  #       TITLE                                        AUTHOR        AGE M R Q E
+  #1005   Just pushed; quick queued                    carol          6m ✓ · ● ○
+  #1006   No CI rows yet + has conflicts               carol          7m ! · ○ ○
 
 Quick failed (1)
 ────────────────────────────────────────────────────────────────────────────────
-  #       TITLE                                          AUTHOR        AGE M Q E
-  #1004   Quick failed: regression                       bob            8m ✓ ✗ ○
+  #       TITLE                                        AUTHOR        AGE M R Q E
+  #1004   Quick failed: regression                     bob            8m ✓ · ✗ ○
 
 DRAFT (2)
-  #       TITLE                                          AUTHOR        AGE M Q E
-  #1011   Draft: refactor Y                              bob           10m ✓ ◉ ○
-  #1012   Draft: exploring approach Z                    alice         11m ? ✓ ✓
+  #       TITLE                                        AUTHOR        AGE M R Q E
+  #1011   Draft: refactor Y                            bob           10m ✓ · ◉ ○
+  #1012   Draft: exploring approach Z                  alice         11m ? · ✓ ✓
 
 13 ready · 2 drafts shown · 15 total from API

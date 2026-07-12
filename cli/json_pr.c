@@ -394,10 +394,95 @@ static int parse_test_run(jscan *s, gh_test_run *run)
     }
 }
 
+static enum gh_review_verdict parse_review_verdict(const char *s)
+{
+    if (!s || !s[0]) {
+        return GH_REVIEW_NONE;
+    }
+    if (base_strcmp(s, "APPROVE") == 0) {
+        return GH_REVIEW_APPROVE;
+    }
+    if (base_strcmp(s, "COMMENT") == 0) {
+        return GH_REVIEW_COMMENT;
+    }
+    if (base_strcmp(s, "REQUEST_CHANGES") == 0) {
+        return GH_REVIEW_REQUEST_CHANGES;
+    }
+    return GH_REVIEW_COMMENT; /* unknown but present → treat as comment */
+}
+
+static int parse_local_review(jscan *s, gh_local_review *rev)
+{
+    base_memset(rev, 0, sizeof(*rev));
+    rev->verdict = GH_REVIEW_NONE;
+    if (jpeek(s) == 'n') {
+        return jskip_value(s);
+    }
+    if (jexpect(s, '{') != 0) {
+        return -1;
+    }
+    if (jconsume(s, '}')) {
+        /* empty object — treat as no useful review */
+        return 0;
+    }
+    for (;;) {
+        char key[64];
+        if (jstring(s, key, sizeof(key)) != 0) {
+            return -1;
+        }
+        if (jexpect(s, ':') != 0) {
+            return -1;
+        }
+        if (base_strcmp(key, "verdict") == 0) {
+            if (jpeek(s) == 'n') {
+                jskip_value(s);
+            } else if (jpeek(s) == '"') {
+                char v[32];
+                if (jstring(s, v, sizeof(v)) != 0) {
+                    return -1;
+                }
+                rev->verdict = parse_review_verdict(v);
+            } else {
+                if (jskip_value(s) != 0) {
+                    return -1;
+                }
+            }
+        } else if (base_strcmp(key, "status") == 0) {
+            if (jpeek(s) == 'n') {
+                jskip_value(s);
+            } else if (jpeek(s) == '"') {
+                if (jstring(s, rev->status, sizeof(rev->status)) != 0) {
+                    return -1;
+                }
+            } else {
+                if (jskip_value(s) != 0) {
+                    return -1;
+                }
+            }
+        } else {
+            if (jskip_value(s) != 0) {
+                return -1;
+            }
+        }
+        if (jconsume(s, '}')) {
+            /* If API sent an object without verdict, still mark as COMMENT. */
+            if (rev->verdict == GH_REVIEW_NONE &&
+                (rev->status[0] != '\0')) {
+                rev->verdict = GH_REVIEW_COMMENT;
+            }
+            return 0;
+        }
+        if (jexpect(s, ',') != 0) {
+            return -1;
+        }
+    }
+}
+
 static int parse_pr(jscan *s, gh_pr *pr)
 {
     base_memset(pr, 0, sizeof(*pr));
     pr->mergeable = GH_MERGEABLE_NULL;
+    pr->local_review.verdict = GH_REVIEW_NONE;
 
     if (jexpect(s, '{') != 0) {
         return -1;
@@ -521,6 +606,10 @@ static int parse_pr(jscan *s, gh_pr *pr)
             }
         } else if (base_strcmp(key, "exhaustiveTest") == 0) {
             if (parse_test_run(s, &pr->exhaustive) != 0) {
+                return -1;
+            }
+        } else if (base_strcmp(key, "localReview") == 0) {
+            if (parse_local_review(s, &pr->local_review) != 0) {
                 return -1;
             }
         } else {

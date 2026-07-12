@@ -4,6 +4,7 @@ PR #1001 CI-green and mergeable: add feature X
   Branch:    feat-x → main
   Updated:   now
   Mergeable: ✓ (clean)
+  Review:    ○ COMMENT (ready)
   Quick:     ✓ passed @ sha-101
   Exhaustive: ✓ passed @ sha-101
   Priority:  Quick + Exhaustive passed (0)
