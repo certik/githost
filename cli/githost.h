@@ -88,6 +88,15 @@ void gh_buf_init(gh_buf *b, Arena *arena);
 void gh_http_global_init(void);
 void gh_http_global_cleanup(void);
 int gh_http_get(Arena *arena, const char *url, gh_buf *out, long *http_code);
+/* Authenticated GET (Cookie: gh_session=… or full Cookie header value). */
+int gh_http_get_auth(Arena *arena, const char *url, const char *cookie,
+                     gh_buf *out, long *http_code);
+/* POST application/json with optional session cookie. */
+int gh_http_post_json(Arena *arena, const char *url, const char *cookie,
+                      const char *json_body, gh_buf *out, long *http_code);
+
+/* Read an entire file into arena memory (NUL-terminated). */
+int gh_read_file(Arena *arena, const char *path, char **out, size_t *out_len);
 
 void gh_pr_list_init(gh_pr_list *list);
 int gh_pr_list_parse(Arena *arena, const char *json, gh_pr_list *list);

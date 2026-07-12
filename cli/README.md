@@ -35,11 +35,18 @@ Requirements: CMake ≥ 3.16, a C99 compiler, libcurl.
 ./build/githost --url http://127.0.0.1:9XXX pr list --passed
 ```
 
-Local review stubs (upload not implemented yet):
+### Local reviews (any agent)
+
+githost does **not** call AI APIs. Any agent writes a `githost.review/v1` JSON
+file; the CLI uploads it. Full contract: [`docs/REVIEW.md`](docs/REVIEW.md).
 
 ```bash
-./build/githost review init 12028
-./build/githost review path 12028
+githost review schema                          # print JSON shape
+githost review init 12028                      # template → ~/.githost/reviews/
+# …agent edits the JSON…
+export GITHOST_SESSION='…'                     # gh_session cookie / id
+githost review submit 12028 --file review.v1.json
+githost review list 12028                      # confirm on server
 ```
 
 ## Tests (reference diffs against the real Worker)

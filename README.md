@@ -167,6 +167,10 @@ UPDATE_REFS=1 ./cli/tests/run_tests.sh ./cli/build/githost   # refresh goldens
 
 See [`cli/README.md`](cli/README.md) for env vars and more commands.
 
+**Local reviews (agent-agnostic):** any tool writes `githost.review/v1` JSON;
+`githost review submit N --file …` POSTs to `/api/prs/N/reviews` (session
+required). Spec and agent prompt: [`cli/docs/REVIEW.md`](cli/docs/REVIEW.md).
+
 ### Fixture data
 
 `npm run dev:seed` populates:

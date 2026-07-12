@@ -10,7 +10,7 @@ import { runJob } from "../jobs/consumer";
 import { getSyncChainStub } from "../durable-objects/sync-chain";
 import { syncLog } from "../lib/sync-log";
 import { currentUser, loadSession, requireSession } from "../lib/auth";
-import { appUpdate } from "../lib/audit";
+import { appInsert, appUpdate } from "../lib/audit";
 
 /**
  * JSON API consumed by the React SPA.
@@ -221,6 +221,145 @@ apiRoutes.get("/prs/:number", async (c) => {
     .all();
 
   return c.json({ pr: row, reviews, localLabels });
+});
+
+/**
+ * POST /api/prs/:number/reviews — upload a local review (CLI / agent).
+ *
+ * Accepts the agent-agnostic `githost.review/v1` document (or a thin subset).
+ * Stores a row in app.ai_review with status=ready so the SPA lists it under
+ * "AI reviews (local)" without running the AI job pipeline.
+ *
+ * Body (githost.review/v1):
+ *   {
+ *     "schema": "githost.review/v1",   // optional but recommended
+ *     "pr": 12028,                    // optional; must match URL if set
+ *     "headSha": "<40-char sha>",
+ *     "verdict": "COMMENT" | "APPROVE" | "REQUEST_CHANGES",  // optional
+ *     "summary": "markdown main comment",
+ *     "comments": [ { "path", "line", "body", "startLine"?, "side"? } ],
+ *     "meta": { "model": "claude-… / grok-… / human" }
+ *   }
+ */
+apiRoutes.post("/prs/:number/reviews", async (c) => {
+  const number = parseInt(c.req.param("number"), 10);
+  if (!Number.isFinite(number) || number <= 0) {
+    return c.json({ error: "invalid PR number" }, 400);
+  }
+
+  type ReviewCommentIn = {
+    path: string;
+    line: number;
+    body: string;
+    startLine?: number;
+    side?: string;
+  };
+  type ReviewBody = {
+    schema?: string;
+    pr?: number;
+    headSha?: string;
+    verdict?: string;
+    summary?: string | null;
+    comments?: ReviewCommentIn[];
+    meta?: { model?: string };
+  };
+
+  const body = await c.req.json<ReviewBody>().catch(() => null);
+  if (!body || typeof body !== "object") {
+    return c.json({ error: "JSON body required" }, 400);
+  }
+  if (body.schema != null && body.schema !== "githost.review/v1") {
+    return c.json({ error: `unsupported schema (want githost.review/v1, got ${body.schema})` }, 400);
+  }
+  if (body.pr != null && body.pr !== number) {
+    return c.json({ error: `body.pr (${body.pr}) does not match URL PR number (${number})` }, 400);
+  }
+  const headSha = (body.headSha ?? "").trim();
+  if (!headSha) {
+    return c.json({ error: "headSha is required" }, 400);
+  }
+
+  const verdict = (body.verdict ?? "COMMENT").toUpperCase();
+  if (!["COMMENT", "APPROVE", "REQUEST_CHANGES"].includes(verdict)) {
+    return c.json({ error: "verdict must be COMMENT | APPROVE | REQUEST_CHANGES" }, 400);
+  }
+
+  const commentsIn = Array.isArray(body.comments) ? body.comments : [];
+  const comments: Array<{ path: string; line: number; body: string; startLine?: number; side?: string }> = [];
+  for (let i = 0; i < commentsIn.length; i++) {
+    const cm = commentsIn[i];
+    if (!cm || typeof cm.path !== "string" || !cm.path.trim()) {
+      return c.json({ error: `comments[${i}].path is required` }, 400);
+    }
+    if (typeof cm.line !== "number" || !Number.isFinite(cm.line) || cm.line < 1) {
+      return c.json({ error: `comments[${i}].line must be a positive number` }, 400);
+    }
+    if (typeof cm.body !== "string") {
+      return c.json({ error: `comments[${i}].body is required` }, 400);
+    }
+    const entry: (typeof comments)[number] = {
+      path: cm.path.trim(),
+      line: Math.floor(cm.line),
+      body: cm.body,
+    };
+    if (typeof cm.startLine === "number" && Number.isFinite(cm.startLine)) {
+      entry.startLine = Math.floor(cm.startLine);
+    }
+    if (typeof cm.side === "string" && cm.side.length > 0) {
+      entry.side = cm.side;
+    }
+    comments.push(entry);
+  }
+
+  const mdb = mirrorDb(c.env.MIRROR_DB);
+  const pr = await mdb.select({
+    id: M.pr.id,
+    repoId: M.pr.repoId,
+    number: M.pr.number,
+  }).from(M.pr).where(eq(M.pr.number, number)).get();
+  if (!pr) return c.notFound();
+
+  const user = currentUser(c);
+  const now = new Date();
+  const id = crypto.randomUUID();
+  const modelRaw = body.meta?.model?.trim();
+  // Encode verdict in model so we can recover it at publish time without a migration.
+  const model = modelRaw && modelRaw.length > 0
+    ? modelRaw
+    : `cli/${verdict}`;
+
+  const row = {
+    id,
+    repoId: pr.repoId,
+    prId: pr.id,
+    prNumber: pr.number,
+    headSha,
+    model,
+    status: "ready" as const,
+    summary: body.summary ?? null,
+    commentsJson: JSON.stringify(comments),
+    errorMessage: null as string | null,
+    postedUpstreamAt: null as Date | null,
+    upstreamReviewId: null as number | null,
+    createdAt: now,
+    updatedAt: now,
+    deletedAt: null as Date | null,
+  };
+
+  const adb = appDb(c.env.APP_DB);
+  await appInsert(adb, A.aiReview, "ai_review", row, user.id);
+
+  return c.json({
+    id,
+    prNumber: pr.number,
+    headSha,
+    status: "ready",
+    verdict,
+    model,
+    summary: row.summary,
+    comments,
+    createdAt: now.getTime(),
+  }, 201);
 });
 
 // GET /api/prs/:number/diff — cached in KV keyed by base..head SHA.

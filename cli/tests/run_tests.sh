@@ -162,4 +162,53 @@ run_case pr_list_all pr list --all
 run_case pr_view_1001 pr view 1001
 run_case pr_list_json pr list --passed --json
 
+# --- Authenticated review upload (POST /api/prs/:n/reviews) ---
+# Insert a durable test session into local app D1 (same state wrangler uses).
+SESSION_ID="cli-test-session"
+NOW_MS="$(python3 -c 'import time; print(int(time.time()*1000))')"
+EXP_MS="$(python3 -c 'import time; print(int(time.time()*1000) + 86400000)')"
+echo "Seeding CLI test session ($SESSION_ID)…"
+npx wrangler d1 execute githost-app --local --command \
+  "INSERT OR REPLACE INTO app_user (id, gh_user_id, login, created_at) VALUES ('cli-test-user', 900001, 'cli-tester', ${NOW_MS});"
+npx wrangler d1 execute githost-app --local --command \
+  "INSERT OR REPLACE INTO user_session (id, user_id, expires_at, created_at) VALUES ('${SESSION_ID}', 'cli-test-user', ${EXP_MS}, ${NOW_MS});"
+
+export GITHOST_SESSION="$SESSION_ID"
+REVIEW_FILE="$CLI_ROOT/tests/examples/review-1001.v1.json"
+
+echo "RUN  review_submit: $BIN --url $BASE_URL review submit 1001 --file …"
+submit_out="$OUT_DIR/review_submit.txt"
+if ! "$BIN" --url "$BASE_URL" --no-color review submit 1001 --file "$REVIEW_FILE" \
+      >"$submit_out" 2>"$OUT_DIR/review_submit.err"; then
+  echo "FAIL review_submit" >&2
+  cat "$OUT_DIR/review_submit.err" >&2 || true
+  cat "$submit_out" >&2 || true
+  exit 1
+fi
+if ! grep -q '"status":"ready"' "$submit_out" && ! grep -q '"status": "ready"' "$submit_out"; then
+  echo "FAIL review_submit: expected status ready in response" >&2
+  cat "$submit_out" >&2
+  exit 1
+fi
+if ! grep -q 'cli-test-agent' "$submit_out"; then
+  echo "FAIL review_submit: expected model cli-test-agent" >&2
+  cat "$submit_out" >&2
+  exit 1
+fi
+echo "OK   review_submit"
+
+echo "RUN  review_list: $BIN --url $BASE_URL review list 1001"
+list_out="$OUT_DIR/review_list.txt"
+if ! "$BIN" --url "$BASE_URL" --no-color review list 1001 >"$list_out" 2>"$OUT_DIR/review_list.err"; then
+  echo "FAIL review_list" >&2
+  cat "$OUT_DIR/review_list.err" >&2 || true
+  exit 1
+fi
+if ! grep -q 'CLI reference review for seeded PR' "$list_out"; then
+  echo "FAIL review_list: uploaded summary not found" >&2
+  cat "$list_out" >&2
+  exit 1
+fi
+echo "OK   review_list"
+
 echo "All CLI reference tests passed (against $BASE_URL)."
