@@ -1,14 +1,29 @@
 # Agent-agnostic PR reviews (`githost.review/v1`)
 
-Any agent (Grok, Claude, Copilot, Codex, a human, …) can produce a review.
-**githost never calls an agent.** The contract is a file on disk:
+Any agent (Grok, Claude, Copilot, Codex, Pi, a human, …) can produce a review.
+**githost never calls an agent API itself.** The contract is a file on disk.
 
-1. Fetch context however you like (`githost pr view N`, `gh pr diff N`, …).
+## One command (recommended)
+
+```bash
+# Uses the first agent found on PATH (claude, grok, copilot, codex, pi)
+./cli/bin/githost-review 12028
+
+# Pick an agent + upload when done
+./cli/bin/githost-review 12028 --agent claude --submit
+GITHOST_AGENT=pi ./cli/bin/githost-review 12028 --submit
+```
+
+Shared instructions live in **`cli/agents/REVIEW_INSTRUCTIONS.md`** — the same
+text is passed to every agent (system prompt or embedded in the user prompt).
+You do **not** maintain five different instruction files.
+
+Manual path (if you prefer not to use the launcher):
+
+1. Fetch context (`githost pr view N`, `gh pr diff N --repo …`, …).
 2. Write a **`githost.review/v1` JSON** document.
 3. Upload: `githost review submit N --file review.v1.json`
 4. Open the PR in the web UI — it appears under **local reviews**.
-
-No SDKs, no vendor lock-in. If a tool can write a JSON file, it can review.
 
 ## Schema
 
@@ -86,37 +101,28 @@ Upload and list need a session cookie (`gh_session`), same as the web app.
 `DEV_LOGIN_ENABLED=true`), copy the `gh_session` cookie value into
 `GITHOST_SESSION` or `~/.githost/session`.
 
-## Suggested agent prompt (copy-paste)
+## Per-agent notes (launcher already knows these)
 
-```text
-You are reviewing GitHub PR #<N> for repository <owner/repo>.
-
-Produce a single JSON file only, no prose outside JSON, matching:
-
-{
-  "schema": "githost.review/v1",
-  "pr": <N>,
-  "headSha": "<HEAD_SHA>",
-  "verdict": "COMMENT" | "APPROVE" | "REQUEST_CHANGES",
-  "summary": "<markdown overall review>",
-  "comments": [
-    { "path": "<repo-relative path>", "line": <number>, "body": "<markdown>" }
-  ],
-  "meta": { "model": "<your-name>" }
-}
-
-Rules:
-- headSha must be the PR head commit you reviewed.
-- Inline comments must use paths and line numbers from the PR diff (new file side).
-- Prefer fewer high-value comments over noise.
-- Write the file to review.v1.json
-```
-
-Then the human (or a script) runs:
+| Agent | CLI | How instructions are passed |
+|---|---|---|
+| Claude Code | `claude -p` | `--append-system-prompt` + task |
+| Grok | `grok --print` | `--system-prompt-override` + task |
+| Copilot CLI | `copilot -p` | instructions embedded in prompt |
+| Codex | `codex exec --full-auto` | combined prompt on stdin |
+| Pi | `pi -p` | `--append-system-prompt <file>` + task |
 
 ```bash
-githost review submit <N> --file review.v1.json
+./cli/bin/githost-review 12028 --agent auto          # first on PATH
+./cli/bin/githost-review 12028 --agent grok
+./cli/bin/githost-review 12028 --print-prompt        # inspect shared prompt
+./cli/bin/githost-review 12028 --dry-run             # which binary would run
 ```
+
+Default auto order: `GITHOST_AGENT_ORDER` or  
+`claude,grok,copilot,codex,pi`.
+
+Upstream repo for `gh` defaults to `UPSTREAM_OWNER`/`UPSTREAM_REPO` in
+`wrangler.toml` (lfortran/lfortran), override with `--repo` or `GITHOST_REPO`.
 
 ## Why not Markdown-only?
 

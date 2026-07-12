@@ -18,6 +18,7 @@
     "test:watch": "vitest",
     "test:cli": "cmake -S cli -B cli/build && cmake --build cli/build && cli/tests/run_tests.sh cli/build/githost",
     "build:cli": "cmake -S cli -B cli/build -DCMAKE_BUILD_TYPE=Release && cmake --build cli/build",
+    "review": "cli/bin/githost-review",
     "db:generate:mirror": "drizzle-kit generate --config drizzle.config.mirror.ts",
     "db:generate:app": "drizzle-kit generate --config drizzle.config.app.ts",
     "db:apply:mirror:local": "wrangler d1 migrations apply githost-mirror --local",

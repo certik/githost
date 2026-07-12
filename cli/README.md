@@ -37,18 +37,28 @@ Requirements: CMake ≥ 3.16, a C99 compiler, libcurl.
 
 ### Local reviews (any agent)
 
-githost does **not** call AI APIs. Any agent writes a `githost.review/v1` JSON
-file; the CLI uploads it. Full contract: [`docs/REVIEW.md`](docs/REVIEW.md).
+githost does **not** call AI APIs. Agents only write a JSON file.
+
+**One command** (shared instructions for Claude / Grok / Copilot / Codex / Pi):
 
 ```bash
-githost review schema                          # print JSON shape
-githost review init 12028                      # template → ~/.githost/reviews/
-# …agent edits the JSON…
-export GITHOST_SESSION='…'                     # gh_session cookie / id
-githost review submit 12028 --file review.v1.json
-githost review list 12028                      # confirm on server
+./cli/bin/githost-review 12028                 # auto-picks first agent on PATH
+./cli/bin/githost-review 12028 --agent claude --submit
 ```
 
+Manual:
+
+```bash
+githost review schema
+githost review init 12028
+# …agent writes githost.review/v1 JSON…
+export GITHOST_SESSION='…'
+githost review submit 12028 --file review.v1.json
+githost review list 12028
+```
+
+Details: [`docs/REVIEW.md`](docs/REVIEW.md),  
+shared prompt: [`agents/REVIEW_INSTRUCTIONS.md`](agents/REVIEW_INSTRUCTIONS.md).
 ## Tests (reference diffs against the real Worker)
 
 CLI output is snapshot-tested against the **actual local Worker + D1**, not a
