@@ -9,6 +9,14 @@ export interface TestRun {
   updatedAt: number;
 }
 
+/** Latest local AI review on a PR list row (from GET /api/prs). */
+export type ReviewVerdict = "APPROVE" | "COMMENT" | "REQUEST_CHANGES";
+
+export interface LocalReviewSummary {
+  verdict: ReviewVerdict;
+  status: "ready" | "posted";
+}
+
 export interface PrSummary {
   id: number;
   number: number;
@@ -28,6 +36,8 @@ export interface PrSummary {
   htmlUrl: string;
   quickTest: TestRun | null;
   exhaustiveTest: TestRun | null;
+  /** Latest ready/posted local review, or null if none. */
+  localReview: LocalReviewSummary | null;
 }
 
 export interface PrDetailResponse {
@@ -40,9 +50,11 @@ export interface AiReview {
   id: string;
   prNumber: number;
   headSha: string;
-  /** Agent / human id from meta.model (may include "verdict:…" suffix). */
+  /** Agent / human id from meta.model. */
   model: string;
   status: "pending" | "ready" | "posted" | "discarded" | "failed";
+  /** APPROVE | COMMENT | REQUEST_CHANGES when set. */
+  verdict?: ReviewVerdict | string | null;
   summary: string | null;
   commentsJson: string | null;
   postedUpstreamAt: number | null;

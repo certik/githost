@@ -232,23 +232,82 @@ function PrList({ signedIn }: { signedIn: boolean }) {
   );
 }
 
+/** Shared grid for list header + rows: title | updated | state | merge | rev | Q | E */
+const PR_LIST_GRID =
+  "grid grid-cols-[1fr_6rem_8rem_3rem_2rem_4.5rem_4.5rem] gap-3 items-center";
+
 /** Header row used at the top of every PR list view, shared for column alignment. */
 function PrListHeader() {
   return (
-    <li className="px-4 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 grid grid-cols-[1fr_6rem_8rem_3rem_4.5rem_4.5rem] gap-3 items-center">
+    <li className={`px-4 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 ${PR_LIST_GRID}`}>
       <span>Pull request</span>
       <span className="text-center" title="Time since last modification">Updated</span>
       <span className="text-center">State</span>
       <span className="text-center" title="Mergeable status from GitHub">Merge</span>
+      <span className="text-center" title="Local AI review (githost)">Rev</span>
       <span className="text-center" title="Quick tests">Quick</span>
       <span className="text-center" title="Exhaustive tests">Exhaustive</span>
     </li>
   );
 }
 
+/**
+ * Compact local-review column:
+ *   ✓  Approve
+ *   ✗  Request changes
+ *   ○  Comment
+ *   ·  No review yet
+ */
+function LocalReviewIndicator({ review }: { review: PrSummary["localReview"] }) {
+  if (!review) {
+    return (
+      <span
+        className="text-zinc-300 font-medium select-none"
+        title="No review yet"
+        aria-label="No review yet"
+      >
+        ·
+      </span>
+    );
+  }
+  const v = review.verdict;
+  if (v === "APPROVE") {
+    return (
+      <span
+        className="text-green-600 font-semibold select-none"
+        title="Approve"
+        aria-label="Approve"
+      >
+        ✓
+      </span>
+    );
+  }
+  if (v === "REQUEST_CHANGES") {
+    return (
+      <span
+        className="text-red-600 font-semibold select-none"
+        title="Request changes"
+        aria-label="Request changes"
+      >
+        ✗
+      </span>
+    );
+  }
+  // COMMENT
+  return (
+    <span
+      className="text-sky-600 font-semibold select-none"
+      title="Comment"
+      aria-label="Comment"
+    >
+      ○
+    </span>
+  );
+}
+
 function PrRow({ p, signedIn }: { p: PrSummary; signedIn: boolean }) {
   return (
-    <li className="px-4 py-3 hover:bg-zinc-50 grid grid-cols-[1fr_6rem_8rem_3rem_4.5rem_4.5rem] gap-3 items-center">
+    <li className={`px-4 py-3 hover:bg-zinc-50 ${PR_LIST_GRID}`}>
       <div className="flex items-baseline gap-2 min-w-0">
         {/* Title → GitHub. Number → githost detail only when signed in. */}
         <a
@@ -277,6 +336,7 @@ function PrRow({ p, signedIn }: { p: PrSummary; signedIn: boolean }) {
       >{formatRelativeTime(p.updatedAt)}</span>
       <span className="flex justify-center"><PrStateBadge pr={p} /></span>
       <span className="flex justify-center"><MergeableIndicator pr={p} /></span>
+      <span className="flex justify-center"><LocalReviewIndicator review={p.localReview} /></span>
       <span className="flex justify-center"><TestStatusDot run={p.quickTest} label="Quick" /></span>
       <span className="flex justify-center"><TestStatusDot run={p.exhaustiveTest} label="Exhaustive" /></span>
     </li>

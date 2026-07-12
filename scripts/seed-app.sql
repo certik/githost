@@ -64,7 +64,7 @@ VALUES
 -- ---------------------------------------------------------------------------
 
 INSERT OR REPLACE INTO ai_review
-  (id, repo_id, pr_id, pr_number, head_sha, model, status, summary,
+  (id, repo_id, pr_id, pr_number, head_sha, model, status, verdict, summary,
    comments_json, error_message, posted_upstream_at, upstream_review_id,
    created_at, updated_at, deleted_at)
 VALUES
@@ -76,6 +76,7 @@ VALUES
     'sha-101',
     'claude-opus',
     'ready',
+    'REQUEST_CHANGES',
     'Seeded review for local UI demos. Inline notes are on README.md and src/example.f90.',
     '[
       {"path":"README.md","line":3,"body":"Nit: this line is only present in the local stub diff — good place to preview a single-line comment."},
@@ -97,7 +98,8 @@ VALUES
     'sha-101',
     'grok',
     'ready',
-    'Second seeded review (same PR) so the list shows multiple agents.',
+    'COMMENT',
+    'Second seeded review (same PR) so the list shows multiple agents. Latest wins for the list column.',
     '[
       {"path":"src/example.f90","line":4,"body":"Where does `n` get a value before `m = n + 1`? If it is undefined, this is a bug."},
       {"path":"README.md","line":5,"body":"Thanks for the demo note — once you have real SHAs, this stub disappears automatically."}
@@ -117,6 +119,7 @@ VALUES
     'sha-107',
     'human/alice',
     'ready',
+    'APPROVE',
     'Light touch on the typo PR — one inline comment only.',
     '[
       {"path":"src/example.f90","line":6,"body":"Optional: use `write(*,*)` if this codebase prefers Fortran I/O style."}

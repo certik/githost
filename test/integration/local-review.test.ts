@@ -140,9 +140,36 @@ describe("POST /api/prs/:number/reviews", () => {
     expect(match!.summary).toBe(doc.summary);
     expect(match!.headSha).toBe(sha);
     expect(match!.model).toBe("test-agent/v1");
+    expect((match as { verdict?: string }).verdict).toBe("REQUEST_CHANGES");
     const parsed = JSON.parse(match!.commentsJson ?? "[]") as Array<{ path: string; line: number }>;
     expect(parsed[0]?.path).toBe("src/foo.f90");
     expect(parsed[0]?.line).toBe(42);
+
+    // List endpoint exposes latest local review for the compact "Rev" column.
+    const list = await fetchSelf("https://example.com/api/prs?state=open");
+    expect(list.status).toBe(200);
+    const listBody = await list.json<{
+      items: Array<{
+        number: number;
+        localReview: { verdict: string; status: string } | null;
+      }>;
+    }>();
+    const row = listBody.items.find((p) => p.number === 1001);
+    expect(row?.localReview).toEqual({
+      verdict: "REQUEST_CHANGES",
+      status: "ready",
+    });
+  });
+
+  it("list localReview is null when PR has no review", async () => {
+    await seedPr({ id: 10, number: 2002, title: "no review yet" });
+    const res = await fetchSelf("https://example.com/api/prs");
+    const body = await res.json<{
+      items: Array<{ number: number; localReview: unknown }>;
+    }>();
+    const row = body.items.find((p) => p.number === 2002);
+    expect(row).toBeTruthy();
+    expect(row!.localReview).toBeNull();
   });
 
   it("rejects body.pr mismatch", async () => {

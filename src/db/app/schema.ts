@@ -45,6 +45,8 @@ export const aiReview = sqliteTable("ai_review", {
   headSha: text("head_sha").notNull(),
   model: text("model").notNull(),
   status: text("status").notNull().default("pending"),      // "pending" | "ready" | "posted" | "discarded" | "failed"
+  /** GitHub-style review event: APPROVE | COMMENT | REQUEST_CHANGES (nullable for legacy rows). */
+  verdict: text("verdict"),
   summary: text("summary"),
   commentsJson: text("comments_json"),                      // serialized array of {path,line,body}
   errorMessage: text("error_message"),
