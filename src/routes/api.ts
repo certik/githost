@@ -96,8 +96,8 @@ apiRoutes.get("/prs", async (c) => {
   .offset(offset)
   .all();
 
-  // Pull test-run rows for these PR ids from the app DB and zip them in.
-  // Cross-DB so we do an in-memory join. Two rows max per PR (quick, exhaustive).
+  // Pull test-run rows + latest local AI review for these PR ids from the app DB
+  // and zip them in. Cross-DB so we do an in-memory join.
   // Also compute the upstream GitHub URL per PR so the SPA can link out.
   const repoUrl = `https://github.com/${c.env.UPSTREAM_OWNER}/${c.env.UPSTREAM_REPO}`;
   let items: Array<Omit<typeof rows[number], "createdAt" | "updatedAt"> & {
@@ -106,6 +106,8 @@ apiRoutes.get("/prs", async (c) => {
     htmlUrl: string;
     quickTest: TestRunOut | null;
     exhaustiveTest: TestRunOut | null;
+    /** Latest ready local review verdict, or null if none. */
+    localReview: LocalReviewOut | null;
   }> = [];
   if (rows.length === 0) {
     items = [];
@@ -121,6 +123,35 @@ apiRoutes.get("/prs", async (c) => {
       else if (r.kind === "exhaustive") slot.exhaustive = r;
       byPr.set(r.prId, slot);
     }
+
+    // Latest ready (or posted) local review per PR — for the list "Rev" column.
+    const reviews = await adb
+      .select({
+        prId: A.aiReview.prId,
+        verdict: A.aiReview.verdict,
+        model: A.aiReview.model,
+        status: A.aiReview.status,
+        createdAt: A.aiReview.createdAt,
+      })
+      .from(A.aiReview)
+      .where(
+        and(
+          inArray(A.aiReview.prId, prIds),
+          isNull(A.aiReview.deletedAt),
+          or(eq(A.aiReview.status, "ready"), eq(A.aiReview.status, "posted")),
+        ),
+      )
+      .orderBy(desc(A.aiReview.createdAt))
+      .all();
+    const reviewByPr = new Map<number, LocalReviewOut>();
+    for (const r of reviews) {
+      if (reviewByPr.has(r.prId)) continue; // already have newer
+      reviewByPr.set(r.prId, {
+        verdict: resolveReviewVerdict(r.verdict, r.model),
+        status: r.status as LocalReviewOut["status"],
+      });
+    }
+
     items = rows.map((p) => ({
       ...p,
       // Drizzle returns timestamp_ms columns as Date objects which JSON
@@ -131,6 +162,7 @@ apiRoutes.get("/prs", async (c) => {
       htmlUrl: `${repoUrl}/pull/${p.number}`,
       quickTest: toTestRunOut(byPr.get(p.id)?.quick),
       exhaustiveTest: toTestRunOut(byPr.get(p.id)?.exhaustive),
+      localReview: reviewByPr.get(p.id) ?? null,
     }));
   }
 
@@ -154,6 +186,40 @@ interface TestRunOut {
   finishedAt: number | null;
   logUrl: string | null;
   updatedAt: number;
+}
+
+export type ReviewVerdict = "APPROVE" | "COMMENT" | "REQUEST_CHANGES";
+
+interface LocalReviewOut {
+  verdict: ReviewVerdict;
+  status: "ready" | "posted";
+}
+
+/**
+ * Prefer the dedicated `verdict` column; fall back to encodings used before
+ * that column existed (`cli/APPROVE`, `agent|REQUEST_CHANGES`). Unknown → COMMENT.
+ */
+function resolveReviewVerdict(
+  verdict: string | null | undefined,
+  model: string | null | undefined,
+): ReviewVerdict {
+  const v = (verdict ?? "").trim().toUpperCase();
+  if (v === "APPROVE" || v === "COMMENT" || v === "REQUEST_CHANGES") return v;
+
+  const m = (model ?? "").trim();
+  if (!m) return "COMMENT";
+  const pipe = m.match(/\|(APPROVE|COMMENT|REQUEST_CHANGES)$/i);
+  if (pipe?.[1]) {
+    return pipe[1].toUpperCase() as ReviewVerdict;
+  }
+  if (/^cli\/(APPROVE|COMMENT|REQUEST_CHANGES)$/i.test(m)) {
+    return m.slice(4).toUpperCase() as ReviewVerdict;
+  }
+  if (/^(APPROVE|COMMENT|REQUEST_CHANGES)$/i.test(m)) {
+    return m.toUpperCase() as ReviewVerdict;
+  }
+  // Legacy rows (e.g. model = "copilot" with no encoded verdict).
+  return "COMMENT";
 }
 
 function toTestRunOut(r: { status: string; headSha: string | null; startedAt: Date | null; finishedAt: Date | null; logUrl: string | null; updatedAt: Date } | undefined): TestRunOut | null {
@@ -342,10 +408,9 @@ apiRoutes.post("/prs/:number/reviews", async (c) => {
   const now = new Date();
   const id = crypto.randomUUID();
   const modelRaw = body.meta?.model?.trim();
-  // Encode verdict in model so we can recover it at publish time without a migration.
-  const model = modelRaw && modelRaw.length > 0
-    ? modelRaw
-    : `cli/${verdict}`;
+  // Agent id only (verdict lives in its own column). Keep a bare model string
+  // for display; legacy fallback encoding is no longer needed for new rows.
+  const model = modelRaw && modelRaw.length > 0 ? modelRaw : `cli/${verdict}`;
 
   const row = {
     id,
@@ -355,6 +420,7 @@ apiRoutes.post("/prs/:number/reviews", async (c) => {
     headSha,
     model,
     status: "ready" as const,
+    verdict,
     summary: body.summary ?? null,
     commentsJson: JSON.stringify(comments),
     errorMessage: null as string | null,
