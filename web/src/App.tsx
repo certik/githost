@@ -16,15 +16,31 @@ const MAX_BATCHES_CHOICES = [5, 15, 50, 100, 200] as const;
 const MAX_BATCHES_DEFAULT = 5;
 
 export default function App() {
-  const { data: me } = useQuery({ queryKey: ["me"], queryFn: () => api.me(), staleTime: 60_000 });
+  const { data: me, isLoading: meLoading } = useQuery({
+    queryKey: ["me"],
+    queryFn: () => api.me(),
+    staleTime: 60_000,
+  });
   const qc = useQueryClient();
   const logout = useMutation({
     mutationFn: () => api.logout(),
     // After the server clears the cookie, do a full-page navigation to the
     // signed-out splash. This unmounts the SPA (and drops React Query's PR
     // cache), so the user can't see stale authenticated state.
-    onSuccess: () => { window.location.assign("/auth/signed-out"); },
+    // Skip auto-login bounce so local DEV_AUTO_LOGIN doesn't instantly re-auth.
+    onSuccess: () => { window.location.assign("/auth/signed-out?no_auto=1"); },
   });
+
+  // Local-only: Worker advertises dev.autoLogin via /api/me when
+  // DEV_LOGIN_ENABLED + DEV_AUTO_LOGIN are set in .dev.vars. Redirect once
+  // so every page load is signed in without clicking /auth/dev-login.
+  useEffect(() => {
+    if (meLoading || !me) return;
+    if (me.user) return;
+    if (!me.dev?.autoLogin || !me.dev.loginUrl) return;
+    if (new URLSearchParams(window.location.search).get("no_auto") === "1") return;
+    window.location.replace(me.dev.loginUrl);
+  }, [me, meLoading]);
 
   return (
     <div className="min-h-screen">

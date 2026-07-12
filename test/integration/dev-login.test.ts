@@ -63,6 +63,43 @@ describe("/auth/dev-login", () => {
     expect(row).not.toBeNull();
   });
 
+  it("GET /api/me advertises autoLogin only when DEV_AUTO_LOGIN is true", async () => {
+    const off = await fetchSelf(
+      "https://example.com/api/me",
+      undefined,
+      { DEV_LOGIN_ENABLED: "true", DEV_AUTO_LOGIN: "" } as Partial<typeof env>,
+    );
+    expect(off.status).toBe(200);
+    const offBody = await off.json<{ dev: { autoLogin: boolean } | null }>();
+    expect(offBody.dev?.autoLogin).toBe(false);
+
+    const on = await fetchSelf(
+      "https://example.com/api/me",
+      undefined,
+      {
+        DEV_LOGIN_ENABLED: "true",
+        DEV_AUTO_LOGIN: "true",
+        DEV_AUTO_LOGIN_USER: "alice",
+      } as Partial<typeof env>,
+    );
+    expect(on.status).toBe(200);
+    const onBody = await on.json<{
+      user: null;
+      dev: { autoLogin: boolean; loginUrl: string; login: string } | null;
+    }>();
+    expect(onBody.user).toBeNull();
+    expect(onBody.dev?.autoLogin).toBe(true);
+    expect(onBody.dev?.login).toBe("alice");
+    expect(onBody.dev?.loginUrl).toBe("/auth/dev-login?login=alice");
+  });
+
+  it("GET /api/me omits dev block when DEV_LOGIN_ENABLED is off", async () => {
+    const res = await fetchSelf("https://example.com/api/me");
+    const body = await res.json<{ user: null; dev?: unknown }>();
+    expect(body.user).toBeNull();
+    expect(body.dev).toBeUndefined();
+  });
+
   it("is idempotent — repeat calls reuse the same app_user row", async () => {
     const init = { DEV_LOGIN_ENABLED: "true" } as Partial<typeof env>;
     await fetchSelf("https://example.com/auth/dev-login?login=alice", undefined, init);

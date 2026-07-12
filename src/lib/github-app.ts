@@ -11,8 +11,35 @@ import { SignJWT, importPKCS8 } from "jose";
 
 const tokenCache = new Map<number, { token: string; expiresAt: number }>();
 
+/** True when the PEM looks like a real PKCS#8 private key (not the .dev.vars placeholder). */
+export function hasUsableGithubAppKey(privateKeyPem: string | undefined | null): boolean {
+  if (!privateKeyPem || !privateKeyPem.trim()) return false;
+  const pem = normalizePem(privateKeyPem);
+  if (pem.includes("...")) return false; // placeholder from .dev.vars.example
+  if (pem.includes("BEGIN RSA PRIVATE KEY")) return false; // PKCS#1 — jose needs PKCS#8
+  return pem.includes("BEGIN PRIVATE KEY");
+}
+
 async function appJwt(appId: string, privateKeyPem: string): Promise<string> {
-  const key = await importPKCS8(normalizePem(privateKeyPem), "RS256");
+  const pem = normalizePem(privateKeyPem);
+  if (!hasUsableGithubAppKey(pem)) {
+    throw new GithubAppAuthError(
+      "GITHUB_APP_PRIVATE_KEY is missing or not PKCS#8 PEM. " +
+        "For local diffs, put a real App private key in .dev.vars " +
+        '(PKCS#8: "-----BEGIN PRIVATE KEY-----"). ' +
+        "Convert PKCS#1 with: openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in app.pem -out app.pkcs8.pem",
+    );
+  }
+  let key;
+  try {
+    key = await importPKCS8(pem, "RS256");
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new GithubAppAuthError(
+      `GITHUB_APP_PRIVATE_KEY could not be imported (${msg}). ` +
+        "Use a PKCS#8 PEM (BEGIN PRIVATE KEY), not a placeholder.",
+    );
+  }
   const now = Math.floor(Date.now() / 1000);
   return await new SignJWT({})
     .setProtectedHeader({ alg: "RS256" })
@@ -22,11 +49,18 @@ async function appJwt(appId: string, privateKeyPem: string): Promise<string> {
     .sign(key);
 }
 
+export class GithubAppAuthError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GithubAppAuthError";
+  }
+}
+
 /**
  * Some keys come as PKCS#1 ("BEGIN RSA PRIVATE KEY"). jose's importPKCS8 expects PKCS#8.
  * If you have a PKCS#1 key, convert once with:
  *   openssl pkcs8 -topk8 -inform PEM -outform PEM -in app.pem -out app.pkcs8.pem -nocrypt
- * This helper just normalizes line endings and trims.
+ * This helper normalizes escaped newlines (common in .dev.vars) and trims.
  */
 function normalizePem(pem: string): string {
   return pem.replace(/\\n/g, "\n").trim() + "\n";

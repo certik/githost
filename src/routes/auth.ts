@@ -20,7 +20,14 @@ import { SESSION_COOKIE, sessionCookie } from "../lib/auth";
 export const authRoutes = new Hono<{ Bindings: Env }>();
 
 const STATE_COOKIE = "gh_oauth_state";
+/** When set, OAuth callback redirects to the CLI loopback instead of "/". */
+const CLI_PORT_COOKIE = "gh_cli_port";
+const CLI_STATE_COOKIE = "gh_cli_state";
 const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
+
+function cookiePair(name: string, value: string, maxAge: number): string {
+  return `${name}=${value}; Max-Age=${maxAge}; Path=/; HttpOnly; Secure; SameSite=Lax`;
+}
 
 authRoutes.get("/login", (c) => {
   const state = randomId(16);
@@ -34,10 +41,7 @@ authRoutes.get("/login", (c) => {
   url.searchParams.set("state", state);
   url.searchParams.set("scope", "read:user");
 
-  c.header(
-    "Set-Cookie",
-    `${STATE_COOKIE}=${state}; Max-Age=600; Path=/; HttpOnly; Secure; SameSite=Lax`,
-  );
+  c.header("Set-Cookie", cookiePair(STATE_COOKIE, state, 600));
   return c.redirect(url.toString(), 302);
 });
 
@@ -116,7 +120,21 @@ authRoutes.get("/callback", async (c) => {
   }).run();
 
   c.header("Set-Cookie", sessionCookie(sessionId, SESSION_TTL_SECONDS));
-  c.header("Set-Cookie", `${STATE_COOKIE}=; Max-Age=0; Path=/`, { append: true });
+  c.header("Set-Cookie", cookiePair(STATE_COOKIE, "", 0), { append: true });
+
+  // CLI browser-login: hand the session back to the local listener.
+  const cliPort = readCookie(c.req.header("cookie"), CLI_PORT_COOKIE);
+  const cliState = readCookie(c.req.header("cookie"), CLI_STATE_COOKIE);
+  if (cliPort && cliState) {
+    c.header("Set-Cookie", cookiePair(CLI_PORT_COOKIE, "", 0), { append: true });
+    c.header("Set-Cookie", cookiePair(CLI_STATE_COOKIE, "", 0), { append: true });
+    const u = new URL(`http://127.0.0.1:${cliPort}/`);
+    u.searchParams.set("session", sessionId);
+    u.searchParams.set("state", cliState);
+    u.searchParams.set("login", me.login);
+    return c.redirect(u.toString(), 302);
+  }
+
   return c.redirect("/", 302);
 });
 
@@ -144,13 +162,14 @@ authRoutes.post("/logout", async (c) => {
  * Bypasses the ALLOWED_GITHUB_LOGINS allowlist by design: in local dev you
  * want to mint whatever login is convenient.
  */
-authRoutes.get("/dev-login", async (c) => {
-  if (c.env.DEV_LOGIN_ENABLED !== "true") return c.notFound();
-
-  const login = (c.req.query("login") ?? "dev").slice(0, 39);  // GitHub login max length
-  const adb = appDb(c.env.APP_DB);
+/** Shared: mint app_user + session for a local login name. Returns session id. */
+async function mintDevSession(
+  env: Env,
+  login: string,
+  userAgent: string | null,
+): Promise<{ sessionId: string; login: string }> {
+  const adb = appDb(env.APP_DB);
   const now = new Date();
-
   const existing = await adb.select().from(A.appUser).where(eq(A.appUser.login, login)).get();
   const userId = existing?.id ?? crypto.randomUUID();
   if (!existing) {
@@ -164,11 +183,77 @@ authRoutes.get("/dev-login", async (c) => {
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
   await adb.insert(A.userSession).values({
     id: sessionId, userId, expiresAt, createdAt: now,
-    userAgent: c.req.header("user-agent") ?? null,
+    userAgent,
   }).run();
+  return { sessionId, login };
+}
+
+authRoutes.get("/dev-login", async (c) => {
+  if (c.env.DEV_LOGIN_ENABLED !== "true") return c.notFound();
+
+  const login = (c.req.query("login") ?? "dev").slice(0, 39);  // GitHub login max length
+  const { sessionId } = await mintDevSession(
+    c.env,
+    login,
+    c.req.header("user-agent") ?? null,
+  );
 
   c.header("Set-Cookie", sessionCookie(sessionId, 30 * 24 * 60 * 60));
   return c.redirect("/", 302);
+});
+
+/**
+ * CLI browser login.
+ *
+ *   githost login  → opens /auth/cli-login?port=…&state=…
+ *
+ * Local (DEV_LOGIN_ENABLED): mint a session immediately and 302 to
+ *   http://127.0.0.1:<port>/?session=…&state=…
+ *
+ * Production: stash port/state in cookies and run the normal GitHub OAuth
+ * flow; /auth/callback then redirects to the CLI loopback with the session.
+ */
+authRoutes.get("/cli-login", async (c) => {
+  const port = parseInt(c.req.query("port") ?? "", 10);
+  const state = c.req.query("state") ?? "";
+  if (!Number.isFinite(port) || port < 1024 || port > 65535) {
+    return c.text("bad port (expect 1024–65535)", 400);
+  }
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(state)) {
+    return c.text("bad state", 400);
+  }
+
+  if (c.env.DEV_LOGIN_ENABLED === "true") {
+    const login = (c.req.query("login") ?? c.env.DEV_AUTO_LOGIN_USER ?? "dev").slice(0, 39);
+    const { sessionId } = await mintDevSession(
+      c.env,
+      login,
+      c.req.header("user-agent") ?? null,
+    );
+    // Also set the browser cookie so the SPA on the same host is signed in.
+    c.header("Set-Cookie", sessionCookie(sessionId, 30 * 24 * 60 * 60));
+    const u = new URL(`http://127.0.0.1:${port}/`);
+    u.searchParams.set("session", sessionId);
+    u.searchParams.set("state", state);
+    u.searchParams.set("login", login);
+    return c.redirect(u.toString(), 302);
+  }
+
+  // Production / no dev-login: OAuth, then bounce back to the CLI.
+  c.header("Set-Cookie", cookiePair(CLI_PORT_COOKIE, String(port), 600), { append: true });
+  c.header("Set-Cookie", cookiePair(CLI_STATE_COOKIE, state, 600), { append: true });
+
+  const oauthState = randomId(16);
+  const cb = new URL(c.req.url);
+  cb.pathname = "/auth/callback";
+  cb.search = "";
+  const url = new URL("https://github.com/login/oauth/authorize");
+  url.searchParams.set("client_id", c.env.GITHUB_OAUTH_CLIENT_ID);
+  url.searchParams.set("redirect_uri", cb.toString());
+  url.searchParams.set("state", oauthState);
+  url.searchParams.set("scope", "read:user");
+  c.header("Set-Cookie", cookiePair(STATE_COOKIE, oauthState, 600), { append: true });
+  return c.redirect(url.toString(), 302);
 });
 
 /**
@@ -199,6 +284,9 @@ authRoutes.get("/signed-out", (c) => {
   <h1>You're signed out</h1>
   <p>Your session has ended. Click below to sign in again.</p>
   <a class="btn" href="/auth/login">Sign in with GitHub</a>
+  <p style="margin-top:1.5rem;font-size:0.85rem;color:#71717a">
+    Local dev? <a href="/auth/dev-login" style="color:#18181b">Dev login</a>
+  </p>
 </body>
 </html>`);
 });

@@ -41,6 +41,7 @@ add_executable(githost
     display.c
     util.c
     out.c
+    login.c
     ${GITHOST_COREC_SOURCES}
 )
 

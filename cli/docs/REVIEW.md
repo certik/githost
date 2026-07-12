@@ -90,16 +90,27 @@ githost review list 12028
 
 ## Auth
 
-Upload and list need a session cookie (`gh_session`), same as the web app.
+Upload and list need a session (`gh_session`), same as the web app.
 
-| Method | How |
+**Recommended — browser login via CLI:**
+
+```bash
+# Local (npm run dev on :8787)
+./cli/build/githost --url http://127.0.0.1:8787 login
+
+# Optional login name when using DEV_LOGIN_ENABLED
+./cli/build/githost --url http://127.0.0.1:8787 login --login alice
+
+# Production (GitHub OAuth through the deployed site)
+./cli/build/githost login
+```
+
+This opens the browser, completes login, and writes `~/.githost/session`.
+
+| Manual alternatives | How |
 |---|---|
-| Env | `export GITHOST_SESSION='<session-id-or-Cookie-value>'` |
+| Env | `export GITHOST_SESSION='<session-id>'` |
 | File | `echo '<session-id>' > ~/.githost/session` |
-
-**Local dev:** open `http://127.0.0.1:8787/auth/dev-login` (with
-`DEV_LOGIN_ENABLED=true`), copy the `gh_session` cookie value into
-`GITHOST_SESSION` or `~/.githost/session`.
 
 ## Per-agent notes (launcher already knows these)
 

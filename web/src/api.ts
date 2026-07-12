@@ -49,6 +49,12 @@ export interface AiReview {
 
 export interface Me {
   user: { id: string; ghUserId: number; login: string } | null;
+  /** Present only when Worker has DEV_LOGIN_ENABLED=true (local .dev.vars). */
+  dev?: {
+    autoLogin: boolean;
+    loginUrl: string;
+    login: string;
+  } | null;
 }
 
 export class ApiError extends Error {

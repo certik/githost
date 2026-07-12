@@ -5,7 +5,7 @@ import { mirrorDb } from "../db/mirror";
 import * as M from "../db/mirror/schema";
 import { appDb } from "../db/app";
 import * as A from "../db/app/schema";
-import { gh } from "../lib/github-app";
+import { gh, GithubAppAuthError, hasUsableGithubAppKey } from "../lib/github-app";
 import { runJob } from "../jobs/consumer";
 import { getSyncChainStub } from "../durable-objects/sync-chain";
 import { syncLog } from "../lib/sync-log";
@@ -32,9 +32,28 @@ const ANON_PRS_LIMIT = 50;
 
 // GET /api/me — who am I? (or null). Stays anonymous so the unauthenticated
 // SPA can still render its header.
+//
+// When local-dev auto-login is enabled, also returns a `dev` block so the SPA
+// can redirect to /auth/dev-login without a hard-coded frontend flag.
 apiRoutes.get("/me", async (c) => {
   const user = await loadSession(c);
-  return c.json({ user });
+  // Only expose the `dev` block when local dev-login is enabled so production
+  // /api/me stays `{ user }` and clients that deep-equal the body keep working.
+  if (c.env.DEV_LOGIN_ENABLED !== "true") {
+    return c.json({ user });
+  }
+  const autoLogin = c.env.DEV_AUTO_LOGIN === "true";
+  const login = (c.env.DEV_AUTO_LOGIN_USER ?? "dev").slice(0, 39);
+  return c.json({
+    user,
+    dev: {
+      autoLogin,
+      loginUrl: autoLogin
+        ? `/auth/dev-login?login=${encodeURIComponent(login)}`
+        : "/auth/dev-login",
+      login,
+    },
+  });
 });
 
 // GET /api/prs?state=open&limit=50&offset=0
@@ -376,18 +395,52 @@ apiRoutes.get("/prs/:number/diff", async (c) => {
     return new Response(cached, { headers: { "content-type": "text/plain; charset=utf-8" } });
   }
 
+  // Local seed SHAs (e.g. "sha-101") are not real Git objects. Don't call GitHub.
+  const looksLikeGitSha = /^[0-9a-f]{7,40}$/i.test(row.headSha);
+  if (!looksLikeGitSha) {
+    const stub =
+      `diff --git a/README.md b/README.md\n` +
+      `--- a/README.md\n+++ b/README.md\n` +
+      `@@ -1,3 +1,6 @@\n` +
+      ` # Local seed PR #${number}\n` +
+      `+\n` +
+      `+This is a stub diff for local development.\n` +
+      `+headSha=${row.headSha} is not a real git object, so githost did not call GitHub.\n` +
+      `+Use a real GITHUB_APP_PRIVATE_KEY and mirrored PRs with real SHAs for live diffs.\n`;
+    return new Response(stub, { headers: { "content-type": "text/plain; charset=utf-8" } });
+  }
+
+  if (!hasUsableGithubAppKey(c.env.GITHUB_APP_PRIVATE_KEY)) {
+    return c.text(
+      "diff unavailable: GITHUB_APP_PRIVATE_KEY is missing or not a valid PKCS#8 PEM. " +
+        "For local dev, paste a real GitHub App private key into .dev.vars " +
+        '(must start with "-----BEGIN PRIVATE KEY-----"; convert PKCS#1 with openssl pkcs8 -topk8 … -nocrypt). ' +
+        "The placeholder in .dev.vars.example is intentionally invalid.",
+      503,
+    );
+  }
+
   // TODO: pick installationId once known (see github-app installation flow).
   const installationId = parseInt(c.env.GITHUB_INSTALLATION_ID, 10);
-  const res = await gh(c.env, {
-    installationId,
-    path: `/repos/${c.env.UPSTREAM_OWNER}/${c.env.UPSTREAM_REPO}/pulls/${number}`,
-    headers: { Accept: "application/vnd.github.v3.diff" },
-  });
-  if (!res.ok) return c.text(await res.text(), res.status as 400);
-  const text = await res.text();
-  // KV entries default to no expiration; cap at 30 days so abandoned PR caches don't pile up.
-  c.executionCtx.waitUntil(c.env.DIFF_CACHE.put(key, text, { expirationTtl: 30 * 24 * 60 * 60 }));
-  return new Response(text, { headers: { "content-type": "text/plain; charset=utf-8" } });
+  try {
+    const res = await gh(c.env, {
+      installationId,
+      path: `/repos/${c.env.UPSTREAM_OWNER}/${c.env.UPSTREAM_REPO}/pulls/${number}`,
+      headers: { Accept: "application/vnd.github.v3.diff" },
+    });
+    if (!res.ok) return c.text(await res.text(), res.status as 400);
+    const text = await res.text();
+    // KV entries default to no expiration; cap at 30 days so abandoned PR caches don't pile up.
+    c.executionCtx.waitUntil(c.env.DIFF_CACHE.put(key, text, { expirationTtl: 30 * 24 * 60 * 60 }));
+    return new Response(text, { headers: { "content-type": "text/plain; charset=utf-8" } });
+  } catch (e) {
+    if (e instanceof GithubAppAuthError) {
+      return c.text(e.message, 503);
+    }
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("diff fetch failed:", msg);
+    return c.text(`diff unavailable: ${msg}`, 502);
+  }
 });
 
 // POST /api/refresh  { resource?: "prs" | "issues" | "comments" }

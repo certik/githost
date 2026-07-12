@@ -2,7 +2,11 @@
 # In production, set these via `wrangler secret put NAME`.
 
 GITHUB_APP_ID="123456"
-GITHUB_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
+# Must be PKCS#8 ("BEGIN PRIVATE KEY"), not PKCS#1 ("BEGIN RSA PRIVATE KEY").
+# Placeholder below is intentionally invalid — local seed PRs use stub diffs instead.
+# For live GitHub diffs, paste your App's .pem (PKCS#8) with literal \n or real newlines:
+#   openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in app.pem -out app.pkcs8.pem
+GITHUB_APP_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nREPLACE_ME\n-----END PRIVATE KEY-----"
 GITHUB_WEBHOOK_SECRET="dev-webhook-secret-change-me"
 
 # User OAuth (the GitHub App can also do user OAuth — same App ID / different client secret).
@@ -19,3 +23,12 @@ TOKEN_ENCRYPTION_KEY="dGVzdC10b2tlbi1lbmNyeXB0aW9uLWtleS1jaGFuZ2UtbWUuLi4="
 # without going through GitHub OAuth (so wrangler dev / vite dev are usable
 # without registering localhost as a callback URL). Never set in production.
 DEV_LOGIN_ENABLED="true"
+
+# LOCAL DEV ONLY. When "true" (and DEV_LOGIN_ENABLED is true), the SPA auto-
+# redirects anonymous browsers to /auth/dev-login so you are signed in on first
+# load. Set to "false" to test the signed-out public list without logging in.
+DEV_AUTO_LOGIN="true"
+# Optional login name for auto-login (default "dev").
+# Put this in .dev.vars — shell env like `DEV_AUTO_LOGIN_USER=alice npm run dev`
+# is NOT passed into the Worker (wrangler only loads .dev.vars / wrangler.toml).
+# DEV_AUTO_LOGIN_USER="alice"

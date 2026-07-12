@@ -39,6 +39,14 @@ Requirements: CMake ≥ 3.16, a C99 compiler, libcurl.
 
 githost does **not** call AI APIs. Agents only write a JSON file.
 
+**Login (once per machine / session file):**
+
+```bash
+# Local Worker must be running (npm run dev)
+./cli/build/githost --url http://127.0.0.1:8787 login
+# Opens the browser → mints a session → writes ~/.githost/session
+```
+
 **One command** (shared instructions for Claude / Grok / Copilot / Codex / Pi):
 
 ```bash
@@ -52,9 +60,8 @@ Manual:
 githost review schema
 githost review init 12028
 # …agent writes githost.review/v1 JSON…
-export GITHOST_SESSION='…'
-githost review submit 12028 --file review.v1.json
-githost review list 12028
+githost --url http://127.0.0.1:8787 review submit 12028 --file review.v1.json
+githost --url http://127.0.0.1:8787 review list 12028
 ```
 
 Details: [`docs/REVIEW.md`](docs/REVIEW.md),  
