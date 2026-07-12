@@ -8,7 +8,7 @@
     "web"
   ],
   "scripts": {
-    "dev": "concurrently -n worker,web -c blue,green \"npm:dev:worker\" \"npm:dev:web\"",
+    "dev": "npm run build && concurrently -n worker,web -c blue,green \"npm:dev:worker\" \"npm:dev:web\"",
     "dev:worker": "wrangler dev",
     "dev:web": "npm -w web run dev",
     "build": "npm -w web run build",

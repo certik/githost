@@ -118,15 +118,17 @@ npm run db:apply:mirror:remote
 npm install                     # one-time
 cp .dev.vars.example .dev.vars  # one-time — already has DEV_LOGIN_ENABLED=true
 npm run dev:seed                # apply migrations + insert fixture PRs/test runs
-npm run dev                     # wrangler (8787) + vite (5173), concurrently
+npm run dev                     # rebuilds web/dist, then wrangler (8787) + vite (5173)
 ```
 
 Open one of:
 
-- **http://localhost:8787/auth/dev-login** — wrangler dev only, served with the
-  built SPA at `web/dist/`. Sets a session cookie and redirects to `/`.
-- **http://localhost:5173/auth/dev-login** — Vite dev with hot-reload; Vite
-  proxies `/api`, `/auth`, `/webhook`, `/healthz` to wrangler on 8787.
+- **http://localhost:5173** — **preferred for UI work** (Vite HMR, live `web/src`).
+  Vite proxies `/api`, `/auth`, `/webhook`, `/healthz` to wrangler on 8787.
+  Sign-in: http://localhost:5173/auth/dev-login
+- **http://localhost:8787** — Worker + **last** `web/dist` build (not HMR).
+  After SPA changes, run `npm run build` (or restart `npm run dev`) or you will
+  see a stale UI. Sign-in: http://localhost:8787/auth/dev-login
 
 The `dev-login` endpoint bypasses GitHub OAuth and creates an `app_user` named
 `dev` (override with `?login=alice`). It is **only enabled when**

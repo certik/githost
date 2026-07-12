@@ -25,9 +25,11 @@ cat <<'EOF'
   ✅ Local D1 databases seeded.
 
   Next:
-    1. npm run dev              # start wrangler (8787) + vite (5173)
-    2. Open http://localhost:5173/auth/dev-login   ← logs you in as "dev"
-    3. Browse the PR list — you should see colored test-status dots.
+    1. npm run dev              # builds web/dist, then wrangler (8787) + vite (5173)
+    2. Prefer http://localhost:5173  (Vite HMR; live React source)
+       http://localhost:8787 serves the last web/dist build (stale until rebuild)
+    3. Open /auth/dev-login   ← logs you in as "dev"
+    4. Browse the PR list — title → GitHub, #number → githost (when signed in)
 
   Re-seed any time:  npm run dev:seed
   Reset to empty:    rm -rf .wrangler/state && npm run db:apply:local
