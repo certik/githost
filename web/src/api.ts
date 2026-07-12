@@ -47,6 +47,18 @@ export interface AiReview {
   createdAt: number;
 }
 
+/** Parsed inline comment from ai_review.comments_json / githost.review/v1. */
+export interface ReviewComment {
+  path: string;
+  line: number;
+  body: string;
+  startLine?: number;
+  side?: string;
+  reviewId: string;
+  reviewStatus: AiReview["status"];
+  headSha: string;
+}
+
 export interface Me {
   user: { id: string; ghUserId: number; login: string } | null;
   /** Present only when Worker has DEV_LOGIN_ENABLED=true (local .dev.vars). */

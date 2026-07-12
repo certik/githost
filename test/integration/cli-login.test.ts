@@ -1,5 +1,6 @@
 /**
- * /auth/cli-login — browser handshake used by `githost login`.
+ * /auth/cli-device — device-code handshake used by `githost login`.
+ * No local TCP listener; browser opens a verification URL and the CLI polls.
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
@@ -21,61 +22,129 @@ async function fetchSelf(
   return worker.fetch(req, { ...env, ...envOverride }, ctx);
 }
 
-describe("/auth/cli-login", () => {
-  it("400s on bad port or state", async () => {
-    const badPort = await fetchSelf(
-      "https://example.com/auth/cli-login?port=80&state=abcdefghij",
-      undefined,
-      { DEV_LOGIN_ENABLED: "true" } as Partial<typeof env>,
-    );
-    expect(badPort.status).toBe(400);
-
-    const badState = await fetchSelf(
-      "https://example.com/auth/cli-login?port=12345&state=short",
-      undefined,
-      { DEV_LOGIN_ENABLED: "true" } as Partial<typeof env>,
-    );
-    expect(badState.status).toBe(400);
+describe("/auth/cli-device", () => {
+  it("start returns device + user codes and verification URL", async () => {
+    const res = await fetchSelf("https://example.com/auth/cli-device/start", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ login: "cliuser" }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      device_code: string;
+      user_code: string;
+      verification_uri_complete: string;
+      interval: number;
+      expires_in: number;
+    };
+    expect(body.device_code.length).toBeGreaterThan(8);
+    expect(body.user_code.length).toBeGreaterThan(4);
+    expect(body.verification_uri_complete).toContain("user_code=");
+    expect(body.verification_uri_complete).toContain(body.user_code);
+    expect(body.interval).toBe(1);
+    expect(body.expires_in).toBeGreaterThan(60);
   });
 
-  it("with DEV_LOGIN_ENABLED redirects to localhost with session", async () => {
-    const state = "teststate123456";
-    const res = await fetchSelf(
-      `https://example.com/auth/cli-login?port=54321&state=${state}&login=cliuser`,
-      undefined,
-      { DEV_LOGIN_ENABLED: "true" } as Partial<typeof env>,
-    );
-    expect(res.status).toBe(302);
-    const loc = res.headers.get("location") ?? "";
-    expect(loc.startsWith("http://127.0.0.1:54321/")).toBe(true);
-    const u = new URL(loc);
-    expect(u.searchParams.get("state")).toBe(state);
-    expect(u.searchParams.get("login")).toBe("cliuser");
-    const session = u.searchParams.get("session");
-    expect(session && session.length > 8).toBe(true);
+  it("poll is pending until browser authorizes, then complete", async () => {
+    const start = await fetchSelf("https://example.com/auth/cli-device/start", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ login: "cliuser" }),
+    });
+    const { device_code, user_code, verification_uri_complete } = (await start.json()) as {
+      device_code: string;
+      user_code: string;
+      verification_uri_complete: string;
+    };
 
-    // Session exists in D1
+    const pending = await fetchSelf("https://example.com/auth/cli-device/poll", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ device_code }),
+    });
+    expect(pending.status).toBe(200);
+    expect(await pending.json()).toEqual({ status: "pending" });
+
+    // Browser hits verification URL with DEV_LOGIN_ENABLED → mints session.
+    const browser = await fetchSelf(verification_uri_complete, undefined, {
+      DEV_LOGIN_ENABLED: "true",
+    } as Partial<typeof env>);
+    expect(browser.status).toBe(200);
+    const html = await browser.text();
+    expect(html).toContain("CLI authorized");
+    expect(html).toContain("@cliuser");
+    expect(browser.headers.get("set-cookie") ?? "").toMatch(/gh_session=/);
+
+    const done = await fetchSelf("https://example.com/auth/cli-device/poll", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ device_code }),
+    });
+    expect(done.status).toBe(200);
+    const complete = (await done.json()) as {
+      status: string;
+      session: string;
+      login: string;
+    };
+    expect(complete.status).toBe("complete");
+    expect(complete.login).toBe("cliuser");
+    expect(complete.session.length).toBeGreaterThan(8);
+
     const row = await env.APP_DB.prepare(
       "SELECT id FROM user_session WHERE id = ?",
     )
-      .bind(session)
+      .bind(complete.session)
       .first();
     expect(row).not.toBeNull();
 
-    // Browser cookie also set for SPA convenience
-    expect(res.headers.get("set-cookie") ?? "").toMatch(/gh_session=/);
+    // user_code was part of the flow
+    expect(user_code.length).toBeGreaterThan(0);
   });
 
-  it("without DEV_LOGIN_ENABLED starts OAuth and sets CLI cookies", async () => {
-    const res = await fetchSelf(
-      "https://example.com/auth/cli-login?port=54321&state=oauthstate1234",
-    );
+  it("poll without device_code is 400", async () => {
+    const res = await fetchSelf("https://example.com/auth/cli-device/poll", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("unknown device_code is expired", async () => {
+    const res = await fetchSelf("https://example.com/auth/cli-device/poll", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ device_code: "does-not-exist" }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: "expired" });
+  });
+
+  it("missing user_code on GET is 400", async () => {
+    const res = await fetchSelf("https://example.com/auth/cli-device");
+    expect(res.status).toBe(400);
+  });
+
+  it("without DEV_LOGIN_ENABLED starts OAuth and sets user_code cookie", async () => {
+    const start = await fetchSelf("https://example.com/auth/cli-device/start", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    const { user_code, verification_uri_complete } = (await start.json()) as {
+      user_code: string;
+      verification_uri_complete: string;
+    };
+
+    const res = await fetchSelf(verification_uri_complete, undefined, {
+      DEV_LOGIN_ENABLED: "false",
+      GITHUB_OAUTH_CLIENT_ID: "test-client-id",
+    } as Partial<typeof env>);
     expect(res.status).toBe(302);
     const loc = res.headers.get("location") ?? "";
     expect(loc).toContain("github.com/login/oauth/authorize");
     const setCookie = res.headers.get("set-cookie") ?? "";
-    // wrangler/test may join cookies; accept either header aggregation
-    expect(setCookie.includes("gh_cli_port") || setCookie.includes("54321")).toBe(
+    expect(setCookie.includes("gh_cli_user_code") || setCookie.includes(user_code)).toBe(
       true,
     );
   });

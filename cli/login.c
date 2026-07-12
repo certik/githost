@@ -1,12 +1,13 @@
 /*
- * Browser-based CLI login.
+ * Browser-assisted CLI login without C stdlib / sockets.
  *
- * 1. Listen on 127.0.0.1:<ephemeral>
- * 2. Open {base}/auth/cli-login?port=&state=
- * 3. Worker mints a session and redirects back to localhost with ?session=
- * 4. Write session id to ~/.githost/session
+ * Device-code style (RFC 8628-ish):
+ *   1. POST /auth/cli-device/start  → device_code + user_code + URL
+ *   2. User opens verification URL in a browser (printed; not auto-opened)
+ *   3. POST /auth/cli-device/poll until authorized
+ *   4. Write session id via platform file I/O to ~/.githost/session
  *
- * Uses libc sockets (hosted build with PLATFORM_SKIP_ENTRY).
+ * Only base/ + platform/ + libcurl (HTTPS).
  */
 
 #include "githost.h"
@@ -16,64 +17,26 @@
 #include <base/numconv.h>
 #include <platform/platform.h>
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <stdio.h>
-#include <stdlib.h> /* system() — hosted CLI helper */
-#include <string.h>
-#include <sys/socket.h>
-#include <time.h>
-#include <unistd.h>
+#include <curl/curl.h>
 
-#ifndef GITHOST_VERSION
-#define GITHOST_VERSION "0.1.0"
-#endif
-
-static void random_state(char *buf, size_t buflen)
+/* Busy-wait approx ms using curl connect timeout (no unistd sleep). */
+static void gh_sleep_ms(long ms)
 {
-    static const char alphabet[] =
-        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    size_t i;
-    unsigned seed = (unsigned)time(NULL) ^ (unsigned)getpid();
-    if (buflen < 17) {
-        buf[0] = '\0';
+    CURL *c;
+    if (ms < 100) {
+        ms = 100;
+    }
+    c = curl_easy_init();
+    if (!c) {
         return;
     }
-    for (i = 0; i < 16; i++) {
-        seed = seed * 1103515245u + 12345u;
-        buf[i] = alphabet[(seed >> 16) % (sizeof(alphabet) - 1)];
-    }
-    buf[16] = '\0';
-}
-
-static int open_browser(const char *url)
-{
-    char cmd[1200];
-#if defined(__APPLE__)
-    base_snprintf(cmd, sizeof(cmd), "open '%s'", url);
-#elif defined(_WIN32)
-    base_snprintf(cmd, sizeof(cmd), "start \"\" \"%s\"", url);
-#else
-    base_snprintf(cmd, sizeof(cmd), "xdg-open '%s' >/dev/null 2>&1", url);
-#endif
-    return system(cmd) == 0 ? 0 : -1;
-}
-
-static int ensure_githost_dir(Arena *arena)
-{
-    const char *home = gh_getenv(arena, "HOME");
-    char path[512];
-    char cmd[600];
-    if (!home) {
-        home = ".";
-    }
-    base_snprintf(path, sizeof(path), "%s/.githost", home);
-    base_snprintf(cmd, sizeof(cmd), "mkdir -p '%s'", path);
-    if (system(cmd) != 0) {
-        gh_eprintf("githost: failed to create %s\n", path);
-        return -1;
-    }
-    return 0;
+    /* Non-routable; curl spends ~ms trying to connect then fails. */
+    curl_easy_setopt(c, CURLOPT_URL, "http://10.255.255.1:9/");
+    curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT_MS, ms);
+    curl_easy_setopt(c, CURLOPT_TIMEOUT_MS, ms);
+    curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L);
+    (void)curl_easy_perform(c);
+    curl_easy_cleanup(c);
 }
 
 static int write_session_file(Arena *arena, const char *session_id)
@@ -83,245 +46,192 @@ static int write_session_file(Arena *arena, const char *session_id)
     platform_fd_t fd;
     ciovec_t iov;
     size_t nwritten;
-    size_t len;
+    char line[300];
+    int n;
 
     if (!home) {
         home = ".";
     }
-    if (ensure_githost_dir(arena) != 0) {
+    base_snprintf(path, sizeof(path), "%s/.githost/session", home);
+    n = base_snprintf(line, sizeof(line), "%s\n", session_id);
+    if (n < 0) {
         return -1;
     }
-    base_snprintf(path, sizeof(path), "%s/.githost/session", home);
+
     fd = platform_path_open(path, base_strlen(path), PLATFORM_RIGHTS_WRITE,
                             PLATFORM_O_CREAT | PLATFORM_O_TRUNC);
     if (fd < 0) {
-        gh_eprintf("githost: cannot write %s\n", path);
-        return -1;
+        /* Parent dir may be missing — try cwd fallback. */
+        base_snprintf(path, sizeof(path), ".githost-session");
+        fd = platform_path_open(path, base_strlen(path), PLATFORM_RIGHTS_WRITE,
+                                PLATFORM_O_CREAT | PLATFORM_O_TRUNC);
+        if (fd < 0) {
+            gh_eprintf(
+                "githost: cannot write session file.\n"
+                "  Create ~/.githost/ then re-run, or:\n"
+                "  export GITHOST_SESSION='%s'\n",
+                session_id);
+            return -1;
+        }
     }
-    len = base_strlen(session_id);
-    iov.buf = session_id;
-    iov.buf_len = len;
+    iov.buf = line;
+    iov.buf_len = (size_t)n;
     if (platform_fd_write(fd, &iov, 1, &nwritten) != 0) {
         platform_fd_close(fd);
         return -1;
-    }
-    /* trailing newline */
-    {
-        const char nl = '\n';
-        iov.buf = &nl;
-        iov.buf_len = 1;
-        (void)platform_fd_write(fd, &iov, 1, &nwritten);
     }
     platform_fd_close(fd);
     gh_printf("Wrote session to %s\n", path);
     return 0;
 }
 
-/* Parse query string for key; writes value into out (NUL-terminated). */
-static int query_get(const char *query, const char *key, char *out, size_t outlen)
+/* Extract "key":"value" string (simple, no escapes in values we set). */
+static int json_get_string(const char *json, const char *key, char *out,
+                           size_t outlen)
 {
-    size_t keylen = base_strlen(key);
-    const char *p = query;
-    while (p && *p) {
-        if (base_strncmp(p, key, keylen) == 0 && p[keylen] == '=') {
-            const char *v = p + keylen + 1;
-            size_t i = 0;
-            while (v[i] && v[i] != '&' && i + 1 < outlen) {
-                out[i] = v[i] == '+' ? ' ' : v[i];
-                i++;
-            }
-            out[i] = '\0';
-            return 0;
-        }
-        p = base_strchr(p, '&');
-        if (p) {
-            p++;
-        }
+    char pat[96];
+    const char *p;
+    size_t i = 0;
+    base_snprintf(pat, sizeof(pat), "\"%s\"", key);
+    p = base_strstr(json, pat);
+    if (!p) {
+        return -1;
     }
-    return -1;
+    p = base_strchr(p + base_strlen(pat), ':');
+    if (!p) {
+        return -1;
+    }
+    p++;
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') {
+        p++;
+    }
+    if (*p != '"') {
+        return -1;
+    }
+    p++;
+    while (*p && *p != '"' && i + 1 < outlen) {
+        out[i++] = *p++;
+    }
+    out[i] = '\0';
+    return i > 0 ? 0 : -1;
 }
 
-static void send_html(int fd, int status, const char *body)
+static void join_url(char *buf, size_t buflen, const char *base, const char *path)
 {
-    char header[256];
-    size_t blen = base_strlen(body);
-    const char *reason = status == 200 ? "OK" : "Error";
-    int n = base_snprintf(header, sizeof(header),
-                          "HTTP/1.1 %d %s\r\n"
-                          "Content-Type: text/html; charset=utf-8\r\n"
-                          "Content-Length: %zu\r\n"
-                          "Connection: close\r\n"
-                          "\r\n",
-                          status, reason, blen);
-    if (n > 0) {
-        (void)write(fd, header, (size_t)n);
+    size_t n = base_strlen(base);
+    if (n > 0 && base[n - 1] == '/') {
+        base_snprintf(buf, buflen, "%s%s", base,
+                      path[0] == '/' ? path + 1 : path);
+    } else {
+        base_snprintf(buf, buflen, "%s%s", base, path);
     }
-    (void)write(fd, body, blen);
 }
 
 int gh_cmd_login(Arena *arena, const char *base_url, const char *login_name)
 {
-    int listen_fd = -1;
-    int client_fd = -1;
-    struct sockaddr_in addr;
-    socklen_t addrlen = sizeof(addr);
-    char state[32];
     char url[1024];
-    char req[4096];
-    ssize_t nread;
-    int port;
+    char body[256];
+    gh_buf resp;
+    long code = 0;
+    char device_code[128];
+    char user_code[64];
+    char verification[512];
+    char poll_body[256];
     char session[256];
-    char got_state[128];
     char login_out[64];
-    const char *path_q;
-    char *nl;
-    int rc = 1;
+    char status[32];
+    int attempts;
+    int n;
 
-    random_state(state, sizeof(state));
-
-    listen_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (listen_fd < 0) {
-        gh_eprintf("githost: socket() failed\n");
-        return 1;
+    join_url(url, sizeof(url), base_url, "/auth/cli-device/start");
+    if (login_name && login_name[0]) {
+        n = base_snprintf(body, sizeof(body), "{\"login\": \"%s\"}", login_name);
+    } else {
+        n = base_snprintf(body, sizeof(body), "{}");
     }
-    {
-        int yes = 1;
-        (void)setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-    }
-    base_memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    addr.sin_port = 0; /* ephemeral */
-    if (bind(listen_fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
-        gh_eprintf("githost: bind() failed\n");
-        close(listen_fd);
-        return 1;
-    }
-    if (getsockname(listen_fd, (struct sockaddr *)&addr, &addrlen) != 0) {
-        gh_eprintf("githost: getsockname() failed\n");
-        close(listen_fd);
-        return 1;
-    }
-    port = (int)ntohs(addr.sin_port);
-    if (listen(listen_fd, 1) != 0) {
-        gh_eprintf("githost: listen() failed\n");
-        close(listen_fd);
+    if (n < 0) {
         return 1;
     }
 
-    /* Build login URL */
-    {
-        size_t bn = base_strlen(base_url);
-        char path[256];
-        if (login_name && login_name[0]) {
-            base_snprintf(path, sizeof(path),
-                          "/auth/cli-login?port=%d&state=%s&login=%s", port,
-                          state, login_name);
-        } else {
-            base_snprintf(path, sizeof(path),
-                          "/auth/cli-login?port=%d&state=%s", port, state);
+    if (gh_http_post_json(arena, url, NULL, body, &resp, &code) != 0) {
+        gh_eprintf("githost: cli-device/start failed\n");
+        return 1;
+    }
+    if (!resp.data) {
+        return 1;
+    }
+    if (json_get_string(resp.data, "device_code", device_code,
+                        sizeof(device_code)) != 0 ||
+        json_get_string(resp.data, "user_code", user_code, sizeof(user_code)) !=
+            0) {
+        gh_eprintf("githost: bad start response: %s\n", resp.data);
+        return 1;
+    }
+    if (json_get_string(resp.data, "verification_uri_complete", verification,
+                        sizeof(verification)) != 0) {
+        /* Build from base + user_code */
+        base_snprintf(verification, sizeof(verification),
+                      "%s/auth/cli-device?user_code=%s", base_url, user_code);
+    }
+
+    gh_printf("githost login\n");
+    gh_printf("-------------\n");
+    gh_printf("Open this URL in your browser to authorize the CLI:\n\n");
+    gh_printf("  %s\n\n", verification);
+    gh_printf("Waiting for authorization");
+
+    join_url(url, sizeof(url), base_url, "/auth/cli-device/poll");
+    base_snprintf(poll_body, sizeof(poll_body),
+                  "{\"device_code\": \"%s\"}", device_code);
+
+    for (attempts = 0; attempts < 300; attempts++) { /* ~5 min at 1s */
+        gh_buf poll_resp;
+        long pcode = 0;
+        gh_print(".");
+        if (gh_http_post_json(arena, url, NULL, poll_body, &poll_resp, &pcode) !=
+            0) {
+            /* 400 pending is not an HTTP error from our helper if we return 200 */
+            gh_sleep_ms(1000);
+            continue;
         }
-        if (bn > 0 && base_url[bn - 1] == '/') {
-            base_snprintf(url, sizeof(url), "%s%s", base_url, path + 1);
-        } else {
-            base_snprintf(url, sizeof(url), "%s%s", base_url, path);
+        if (!poll_resp.data) {
+            gh_sleep_ms(1000);
+            continue;
         }
-    }
-
-    gh_printf("Opening browser for login…\n");
-    gh_printf("If it does not open, visit:\n  %s\n", url);
-    if (open_browser(url) != 0) {
-        gh_eprintf("githost: could not open browser automatically\n");
-    }
-    gh_printf("Waiting for callback on http://127.0.0.1:%d/ …\n", port);
-
-    client_fd = accept(listen_fd, NULL, NULL);
-    if (client_fd < 0) {
-        gh_eprintf("githost: accept() failed\n");
-        close(listen_fd);
-        return 1;
-    }
-
-    nread = read(client_fd, req, sizeof(req) - 1);
-    if (nread <= 0) {
-        gh_eprintf("githost: empty request from browser\n");
-        close(client_fd);
-        close(listen_fd);
-        return 1;
-    }
-    req[nread] = '\0';
-
-    /* Expect: GET /?session=...&state=... HTTP/1.x */
-    if (base_strncmp(req, "GET ", 4) != 0) {
-        send_html(client_fd, 400, "<html><body>Expected GET</body></html>");
-        close(client_fd);
-        close(listen_fd);
-        return 1;
-    }
-    path_q = req + 4;
-    while (*path_q == ' ') {
-        path_q++;
-    }
-    nl = base_strchr(path_q, ' ');
-    if (nl) {
-        *nl = '\0';
-    }
-    /* path_q is like /?session=x&state=y or /callback?session= */
-    {
-        const char *q = base_strchr(path_q, '?');
-        if (!q) {
-            send_html(client_fd, 400,
-                      "<html><body>Missing query string</body></html>");
-            close(client_fd);
-            close(listen_fd);
+        if (json_get_string(poll_resp.data, "status", status, sizeof(status)) !=
+            0) {
+            gh_sleep_ms(1000);
+            continue;
+        }
+        if (base_strcmp(status, "pending") == 0) {
+            gh_sleep_ms(1000);
+            continue;
+        }
+        if (base_strcmp(status, "complete") == 0 ||
+            base_strcmp(status, "authorized") == 0) {
+            if (json_get_string(poll_resp.data, "session", session,
+                                sizeof(session)) != 0) {
+                gh_eprintf("\ngithost: poll complete but no session\n");
+                return 1;
+            }
+            if (json_get_string(poll_resp.data, "login", login_out,
+                                sizeof(login_out)) != 0) {
+                base_snprintf(login_out, sizeof(login_out), "?");
+            }
+            gh_printf("\nAuthorized as %s\n", login_out);
+            if (write_session_file(arena, session) != 0) {
+                return 1;
+            }
+            gh_printf("You can now run: githost review submit …\n");
+            return 0;
+        }
+        if (base_strcmp(status, "expired") == 0 ||
+            base_strcmp(status, "denied") == 0) {
+            gh_eprintf("\ngithost: login %s\n", status);
             return 1;
         }
-        q++;
-        if (query_get(q, "session", session, sizeof(session)) != 0 ||
-            !session[0]) {
-            send_html(client_fd, 400,
-                      "<html><body>Missing session</body></html>");
-            close(client_fd);
-            close(listen_fd);
-            return 1;
-        }
-        if (query_get(q, "state", got_state, sizeof(got_state)) != 0 ||
-            base_strcmp(got_state, state) != 0) {
-            send_html(client_fd, 400,
-                      "<html><body>Invalid state</body></html>");
-            close(client_fd);
-            close(listen_fd);
-            return 1;
-        }
-        if (query_get(q, "login", login_out, sizeof(login_out)) != 0) {
-            base_snprintf(login_out, sizeof(login_out), "?");
-        }
+        gh_sleep_ms(1000);
     }
-
-    send_html(client_fd, 200,
-              "<!doctype html><html><head><meta charset=utf-8>"
-              "<title>githost login</title></head>"
-              "<body style=\"font-family:system-ui;padding:2rem\">"
-              "<h1>Logged in to githost CLI</h1>"
-              "<p>You can close this window and return to the terminal.</p>"
-              "</body></html>");
-    close(client_fd);
-    close(listen_fd);
-    listen_fd = -1;
-    client_fd = -1;
-
-    if (write_session_file(arena, session) != 0) {
-        return 1;
-    }
-    gh_printf("Logged in as %s\n", login_out);
-    gh_printf("You can now run: githost review submit …\n");
-    rc = 0;
-
-    if (client_fd >= 0) {
-        close(client_fd);
-    }
-    if (listen_fd >= 0) {
-        close(listen_fd);
-    }
-    return rc;
+    gh_eprintf("\ngithost: login timed out\n");
+    return 1;
 }
