@@ -1,0 +1,12 @@
+PR #1001 CI-green and mergeable: add feature X
+  State:     Ready for review
+  Author:    alice
+  Branch:    feat-x → main
+  Updated:   now
+  Mergeable: ✓ (clean)
+  Quick:     ✓ passed @ sha-101
+  Exhaustive: ✓ passed @ sha-101
+  Priority:  Quick + Exhaustive passed (0)
+  URL:       https://github.com/lfortran/lfortran/pull/1001
+  Quick log: https://example.com/log/1q
+  Exh. log:  https://example.com/log/1e

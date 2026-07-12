@@ -1,0 +1,127 @@
+/*
+ * HTTPS via libcurl. This is the only githost translation unit that includes
+ * a third-party header (curl/curl.h); that header may pull C library headers.
+ * The rest of githost stays on base/ + platform/ only.
+ */
+
+#include "githost.h"
+#include "out.h"
+
+#include <curl/curl.h>
+
+void gh_http_global_init(void)
+{
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+}
+
+void gh_http_global_cleanup(void)
+{
+    curl_global_cleanup();
+}
+
+void *gh_arena_grow(Arena *arena, void *old, size_t old_count, size_t new_count,
+                    size_t elem_size)
+{
+    void *p = arena_alloc(arena, new_count * elem_size);
+    if (old && old_count > 0) {
+        size_t n = old_count < new_count ? old_count : new_count;
+        base_memcpy(p, old, n * elem_size);
+    }
+    return p;
+}
+
+void gh_buf_init(gh_buf *b, Arena *arena)
+{
+    b->arena = arena;
+    b->data = NULL;
+    b->len = 0;
+    b->cap = 0;
+}
+
+static int buf_grow(gh_buf *b, size_t need)
+{
+    size_t ncap = b->cap ? b->cap : 4096;
+    while (ncap < need) {
+        if (ncap > (SIZE_MAX / 2)) {
+            return -1;
+        }
+        ncap *= 2;
+    }
+    b->data = (char *)gh_arena_grow(b->arena, b->data, b->len, ncap, 1);
+    b->cap = ncap;
+    return 0;
+}
+
+static size_t write_cb(char *ptr, size_t size, size_t nmemb, void *userdata)
+{
+    gh_buf *b = (gh_buf *)userdata;
+    size_t n = size * nmemb;
+    if (n == 0) {
+        return 0;
+    }
+    if (buf_grow(b, b->len + n + 1) != 0) {
+        return 0;
+    }
+    base_memcpy(b->data + b->len, ptr, n);
+    b->len += n;
+    b->data[b->len] = '\0';
+    return n;
+}
+
+int gh_http_get(Arena *arena, const char *url, gh_buf *out, long *http_code)
+{
+    CURL *curl;
+    CURLcode rc;
+    long code = 0;
+
+    if (http_code) {
+        *http_code = 0;
+    }
+    gh_buf_init(out, arena);
+
+    curl = curl_easy_init();
+    if (!curl) {
+        gh_eprintf("githost: curl_easy_init failed\n");
+        return -1;
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT,
+                     "githost/" GITHOST_VERSION " (lfortran)");
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, out);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
+
+    rc = curl_easy_perform(curl);
+    if (rc != CURLE_OK) {
+        gh_eprintf("githost: HTTP request failed: %s\n",
+                   curl_easy_strerror(rc));
+        curl_easy_cleanup(curl);
+        return -1;
+    }
+
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
+    if (http_code) {
+        *http_code = code;
+    }
+    curl_easy_cleanup(curl);
+
+    if (code < 200 || code >= 300) {
+        gh_eprintf("githost: HTTP %ld for %s\n", code, url);
+        if (out->data && out->len > 0) {
+            size_t show = out->len > 200 ? 200 : out->len;
+            gh_eprintf("githost: body: %.*s\n", (int)show, out->data);
+        }
+        return -1;
+    }
+
+    if (!out->data) {
+        if (buf_grow(out, 1) != 0) {
+            return -1;
+        }
+        out->data[0] = '\0';
+        out->len = 0;
+    }
+    return 0;
+}

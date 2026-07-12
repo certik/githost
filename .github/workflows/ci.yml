@@ -41,3 +41,39 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+  # Pure-C CLI against the real local Worker + seeded D1 (not a JSON fixture).
+  cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - run: npm ci
+
+      - name: Install C build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake \
+            ninja-build \
+            libcurl4-openssl-dev \
+            pkg-config
+
+      - name: Local Worker secrets for wrangler dev
+        run: cp .dev.vars.example .dev.vars
+
+      - name: Build SPA assets (Worker ASSETS binding)
+        run: npm -w web run build
+
+      - name: Build CLI
+        run: |
+          cmake -S cli -B cli/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build cli/build
+
+      - name: CLI reference tests (seed D1 + wrangler dev + diff)
+        run: cli/tests/run_tests.sh cli/build/githost

@@ -1,0 +1,50 @@
+{
+  "items": [
+    {
+      "number": 1001,
+      "title": "CI-green and mergeable: add feature X",
+      "state": "open",
+      "draft": false,
+      "merged": false,
+      "mergeable": true,
+      "authorLogin": "alice",
+      "htmlUrl": "https://github.com/lfortran/lfortran/pull/1001",
+      "updatedAt": 1700000900000,
+      "priority": 0,
+      "priorityLabel": "Quick + Exhaustive passed",
+      "quickTest": "passed",
+      "exhaustiveTest": "passed"
+    },
+    {
+      "number": 1007,
+      "title": "CI-green: tidy typo",
+      "state": "open",
+      "draft": false,
+      "merged": false,
+      "mergeable": true,
+      "authorLogin": "carol",
+      "htmlUrl": "https://github.com/lfortran/lfortran/pull/1007",
+      "updatedAt": 1700000850000,
+      "priority": 0,
+      "priorityLabel": "Quick + Exhaustive passed",
+      "quickTest": "passed",
+      "exhaustiveTest": "passed"
+    },
+    {
+      "number": 1013,
+      "title": "CI-green, mergeable unknown (still computing)",
+      "state": "open",
+      "draft": false,
+      "merged": false,
+      "mergeable": null,
+      "authorLogin": "bob",
+      "htmlUrl": "https://github.com/lfortran/lfortran/pull/1013",
+      "updatedAt": 1700000825000,
+      "priority": 0,
+      "priorityLabel": "Quick + Exhaustive passed",
+      "quickTest": "passed",
+      "exhaustiveTest": "passed"
+    }
+  ],
+  "count": 3
+}

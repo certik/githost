@@ -25,6 +25,7 @@ migrations/
   mirror/0001_init.sql  # githost-mirror DB (regenerable cache of GitHub state)
   app/0001_init.sql     # githost-app    DB (irreplaceable local data)
 web/                    # React + Vite + Tailwind SPA, builds to web/dist
+cli/                    # Pure-C CLI for the PR dashboard (libcurl + corec arenas)
 ```
 
 ## One-time setup
@@ -132,6 +133,40 @@ The `dev-login` endpoint bypasses GitHub OAuth and creates an `app_user` named
 `DEV_LOGIN_ENABLED="true"` is in `.dev.vars` — in production that var is
 unset and the endpoint returns 404. Asserted by tests.
 
+## CLI (`cli/`)
+
+A small pure-C client that queries `GET /api/prs` the same way the web UI does
+(anonymous, no auth yet) and prints the review-priority table in 80 columns.
+
+```bash
+cd cli
+cmake -S . -B build && cmake --build build
+./build/githost                          # production default URL
+./build/githost --url http://127.0.0.1:8787 pr list --passed   # local worker
+./build/githost pr view 12028
+```
+
+### CLI tests (reference diffs against the real Worker)
+
+The CLI is snapshot-tested against **local `wrangler dev` + seeded D1** (the
+same `scripts/seed-*.sql` used for `npm run dev:seed`), not a JSON fixture:
+
+1. Seed fixed PRs / test runs into local D1.
+2. Start the Worker on port 8799.
+3. Run `githost --url http://127.0.0.1:8799 --no-color …` and `diff` stdout
+   against `cli/tests/reference/*.txt`.
+
+Relative times stay deterministic (`max(updatedAt)` + fixed seed timestamps).
+Server wire-format changes break these tests, which is intentional.
+
+```bash
+cmake -S cli -B cli/build && cmake --build cli/build
+./cli/tests/run_tests.sh ./cli/build/githost   # or: npm run test:cli
+UPDATE_REFS=1 ./cli/tests/run_tests.sh ./cli/build/githost   # refresh goldens
+```
+
+See [`cli/README.md`](cli/README.md) for env vars and more commands.
+
 ### Fixture data
 
 `npm run dev:seed` populates:
@@ -180,7 +215,7 @@ Four workflows live in `.github/workflows/`:
 
 | File | Trigger | What it does |
 |---|---|---|
-| `ci.yml` | every push & PR | typecheck Worker, typecheck + build SPA, `wrangler deploy --dry-run` |
+| `ci.yml` | every push & PR to `main` | typecheck Worker, typecheck + build SPA, `wrangler deploy --dry-run`, Worker tests, **CLI build + reference tests** |
 | `deploy.yml` | push to `main`, manual | snapshot D1 Time Travel bookmarks → apply prod migrations → `wrangler deploy` |
 | `preview.yml` | PR open / push / reopen | apply staging migrations → `wrangler versions upload --env preview` → sticky PR comment with the preview URL |
 | `backup.yml` | nightly at 04:00 UTC, manual | `wrangler d1 export --remote` for both DBs → upload as 90-day workflow artifact |

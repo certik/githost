@@ -1,0 +1,12 @@
+Pull requests  (review priority · open)
+
+READY FOR REVIEW
+
+Quick + Exhaustive passed (3)
+────────────────────────────────────────────────────────────────────────────────
+  #       TITLE                                          AUTHOR        AGE M Q E
+  #1001   CI-green and mergeable: add feature X          alice         now ✓ ✓ ✓
+  #1007   CI-green: tidy typo                            carol          0m ✓ ✓ ✓
+  #1013   CI-green, mergeable unknown (still computing)  bob            1m ? ✓ ✓
+
+3 ready · 0 drafts shown · 15 total from API
