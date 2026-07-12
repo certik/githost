@@ -60,10 +60,15 @@ static int fetch_prs(Arena *arena, const char *base_url, gh_pr_list *list)
     int rc;
     size_t n;
 
-    base_snprintf(url, sizeof(url), "%s/api/prs", base_url);
+    /*
+     * Match the SPA default "Open" filter: anonymous /api/prs is capped at 50
+     * rows. Without state=open those 50 mix open+closed and many ready PRs are
+     * pushed out of the window (web shows 14 both-passed; unfiltered showed 7).
+     */
+    base_snprintf(url, sizeof(url), "%s/api/prs?state=open", base_url);
     n = base_strlen(base_url);
     if (n > 0 && base_url[n - 1] == '/') {
-        base_snprintf(url, sizeof(url), "%sapi/prs", base_url);
+        base_snprintf(url, sizeof(url), "%sapi/prs?state=open", base_url);
     }
 
     rc = gh_http_get(arena, url, &body, &code);
