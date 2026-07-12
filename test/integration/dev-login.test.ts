@@ -93,10 +93,11 @@ describe("/auth/dev-login", () => {
     expect(onBody.dev?.loginUrl).toBe("/auth/dev-login?login=alice");
   });
 
-  it("GET /api/me has no dev block when DEV_LOGIN_ENABLED is off", async () => {
+  it("GET /api/me omits dev block when DEV_LOGIN_ENABLED is off", async () => {
     const res = await fetchSelf("https://example.com/api/me");
-    const body = await res.json<{ dev: unknown }>();
-    expect(body.dev).toBeNull();
+    const body = await res.json<{ user: null; dev?: unknown }>();
+    expect(body.user).toBeNull();
+    expect(body.dev).toBeUndefined();
   });
 
   it("is idempotent — repeat calls reuse the same app_user row", async () => {
