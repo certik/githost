@@ -4,39 +4,156 @@
 
 /* diff2html ships its own stylesheet; we import it from the component that uses it. */
 
-/* Inline review comments injected into the unified (line-by-line) diff. */
-.githost-diff .githost-review-comment-cell {
+/*
+ * Inline review comments — GitHub PR-style cards over the unified diff.
+ * Classes are short (ghc-*) to keep injected HTML small.
+ */
+
+.githost-diff .ghc-cell {
   padding: 0 !important;
-  background: #fffbeb;
-  border-top: 1px solid #fcd34d;
-  border-bottom: 1px solid #fcd34d;
+  background: transparent !important;
+  border: none !important;
 }
-.githost-diff .githost-review-comment {
-  padding: 0.5rem 0.75rem;
-  border-left: 3px solid #f59e0b;
-  margin: 0.25rem 0.5rem 0.25rem 0;
-  background: #fffbeb;
-  font-family: system-ui, -apple-system, sans-serif;
-  font-size: 0.8125rem;
+
+.githost-diff .ghc-cell-inner {
+  /* Soft tint behind the card (like GitHub’s green/pink line wash). */
+  background: #e6ffec;
+  padding: 8px 12px 12px 40px;
+  border-top: 1px solid #aff5b4;
+  border-bottom: 1px solid #aff5b4;
+}
+
+.githost-diff .ghc-thread {
+  background: #ffffff;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  box-shadow: 0 1px 0 rgba(31, 35, 40, 0.04);
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans",
+    Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #1f2328;
+  max-width: 780px;
+  margin: 0 0 8px 0;
+}
+
+.githost-diff .ghc-thread:last-child {
+  margin-bottom: 0;
+}
+
+.githost-diff .ghc-thread-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: #f6f8fa;
+  border-bottom: 1px solid #d0d7de;
+  color: #656d76;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.githost-diff .ghc-thread-range {
+  color: #656d76;
+}
+
+.githost-diff .ghc-comment {
+  display: flex;
+  gap: 10px;
+  padding: 12px;
+  background: #ffffff;
+}
+
+.githost-diff .ghc-comment-avatar {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  margin-top: 2px;
+}
+
+.githost-diff .ghc-comment-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.githost-diff .ghc-comment-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin-bottom: 4px;
+  line-height: 1.25;
+}
+
+.githost-diff .ghc-comment-author {
+  font-weight: 600;
+  color: #1f2328;
+  font-size: 14px;
+}
+
+.githost-diff .ghc-comment-time {
+  color: #656d76;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.githost-diff .ghc-comment-badge {
+  display: inline-block;
+  padding: 0 7px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  border: 1px solid #d0d7de;
+  border-radius: 2em;
+  color: #656d76;
+  background: #ffffff;
+}
+
+.githost-diff .ghc-comment-sha {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 12px;
+  color: #656d76;
+}
+
+.githost-diff .ghc-comment-body {
+  color: #1f2328;
+  font-size: 14px;
+  line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
+  margin-top: 2px;
 }
-.githost-diff .githost-review-comment-meta {
-  color: #92400e;
-  font-size: 0.7rem;
-  margin-bottom: 0.2rem;
+
+/* Unanchored comments (path/line not in the visible diff). */
+.githost-diff .ghc-unmatched {
+  padding: 12px 16px 16px;
+  background: #f6f8fa;
+  border-top: 1px solid #d0d7de;
 }
-.githost-diff .githost-review-comment-body {
-  color: #18181b;
-  line-height: 1.4;
+
+.githost-diff .ghc-unmatched-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #656d76;
+  margin-bottom: 8px;
 }
-.githost-diff .githost-review-unmatched {
-  padding: 0.75rem;
-  background: #fafafa;
-  border-top: 1px solid #e4e4e7;
+
+.githost-diff .ghc-unmatched .ghc-thread {
+  margin-bottom: 8px;
 }
-.githost-diff .githost-review-unmatched-title {
-  font-size: 0.75rem;
-  color: #71717a;
-  margin-bottom: 0.35rem;
+
+.githost-diff .ghc-unmatched .ghc-cell-inner {
+  background: transparent;
+  padding: 0;
+  border: none;
 }

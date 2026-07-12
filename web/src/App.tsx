@@ -561,6 +561,14 @@ function SkippedIcon() {
   );
 }
 
+/** Strip optional "verdict:…" suffix encoded in ai_review.model. */
+function reviewAuthorLabel(model: string | undefined | null): string {
+  if (!model || !model.trim()) return "review";
+  // model may be "claude-opus" or "claude-opus|COMMENT"
+  const base = model.split("|")[0]?.trim() || model.trim();
+  return base || "review";
+}
+
 function parseReviewComments(reviews: AiReview[]): ReviewComment[] {
   const out: ReviewComment[] = [];
   for (const r of reviews) {
@@ -574,6 +582,12 @@ function parseReviewComments(reviews: AiReview[]): ReviewComment[] {
         side?: string;
       }>;
       if (!Array.isArray(arr)) continue;
+      const createdAt =
+        typeof r.createdAt === "number"
+          ? r.createdAt
+          : r.createdAt
+            ? new Date(r.createdAt as unknown as string).getTime()
+            : Date.now();
       for (const c of arr) {
         if (!c?.path || typeof c.line !== "number" || !c.body) continue;
         out.push({
@@ -585,6 +599,8 @@ function parseReviewComments(reviews: AiReview[]): ReviewComment[] {
           reviewId: r.id,
           reviewStatus: r.status,
           headSha: r.headSha,
+          author: reviewAuthorLabel(r.model),
+          createdAt,
         });
       }
     } catch {
@@ -592,6 +608,61 @@ function parseReviewComments(reviews: AiReview[]): ReviewComment[] {
     }
   }
   return out;
+}
+
+function lineRangeLabel(c: ReviewComment): string {
+  const side = (c.side ?? "RIGHT").toUpperCase() === "LEFT" ? "L" : "R";
+  if (c.startLine != null && c.startLine !== c.line) {
+    return `Comment on lines ${side}${c.startLine} to ${side}${c.line}`;
+  }
+  return `Comment on line ${side}${c.line}`;
+}
+
+function avatarInitials(name: string): string {
+  const parts = name.replace(/[^a-zA-Z0-9]+/g, " ").trim().split(/\s+/);
+  if (parts.length >= 2) {
+    return ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase() || "?";
+  }
+  return name.slice(0, 2).toUpperCase() || "?";
+}
+
+/** Stable pastel from author string (GitHub-ish avatar placeholder). */
+function avatarColor(name: string): string {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  const hue = h % 360;
+  return `hsl(${hue} 45% 42%)`;
+}
+
+function renderCommentCard(c: ReviewComment): string {
+  const author = escapeHtml(c.author);
+  const initials = escapeHtml(avatarInitials(c.author));
+  const color = avatarColor(c.author);
+  const when = escapeHtml(formatRelativeTime(c.createdAt));
+  const range = escapeHtml(lineRangeLabel(c));
+  const body = escapeHtml(c.body);
+  const status = escapeHtml(c.reviewStatus);
+  const sha = escapeHtml(c.headSha.slice(0, 7));
+
+  return (
+    `<div class="ghc-thread">` +
+    `<div class="ghc-thread-header">` +
+    `<span class="ghc-thread-range">${range}</span>` +
+    `</div>` +
+    `<div class="ghc-comment">` +
+    `<div class="ghc-comment-avatar" style="background:${color}" aria-hidden="true">${initials}</div>` +
+    `<div class="ghc-comment-main">` +
+    `<div class="ghc-comment-header">` +
+    `<span class="ghc-comment-author">${author}</span>` +
+    `<span class="ghc-comment-time">${when}</span>` +
+    `<span class="ghc-comment-badge">${status}</span>` +
+    `<span class="ghc-comment-sha" title="Review head">${sha}</span>` +
+    `</div>` +
+    `<div class="ghc-comment-body">${body}</div>` +
+    `</div>` +
+    `</div>` +
+    `</div>`
+  );
 }
 
 /** Normalize paths from review comments and diff2html file headers for matching. */
@@ -686,29 +757,16 @@ function injectCommentsIntoDiffHtml(html: string, comments: ReviewComment[]): st
 
       const colCount = row.children.length || 2;
       const commentRow = doc.createElement("tr");
-      commentRow.className = "githost-review-comment-row";
+      commentRow.className = "ghc-row";
       const td = doc.createElement("td");
       td.colSpan = colCount;
-      td.className = "githost-review-comment-cell";
+      td.className = "ghc-cell";
 
-      const blocks = matching
-        .map((c) => {
-          used.add(c);
-          const range =
-            c.startLine != null && c.startLine !== c.line
-              ? `L${c.startLine}–L${c.line}`
-              : `L${c.line}`;
-          return (
-            `<div class="githost-review-comment">` +
-            `<div class="githost-review-comment-meta">` +
-            `${escapeHtml(c.reviewStatus)} · ${escapeHtml(c.headSha.slice(0, 7))} · ${escapeHtml(range)}` +
-            `</div>` +
-            `<div class="githost-review-comment-body">${escapeHtml(c.body)}</div>` +
-            `</div>`
-          );
-        })
-        .join("");
-      td.innerHTML = blocks;
+      for (const c of matching) used.add(c);
+      td.innerHTML =
+        `<div class="ghc-cell-inner">` +
+        matching.map(renderCommentCard).join("") +
+        `</div>`;
       commentRow.appendChild(td);
       row.parentNode?.insertBefore(commentRow, row.nextSibling);
     }
@@ -718,18 +776,10 @@ function injectCommentsIntoDiffHtml(html: string, comments: ReviewComment[]): st
     if (unmatched.length > 0) {
       const wrapper = file.querySelector(".d2h-file-diff") ?? file;
       const box = doc.createElement("div");
-      box.className = "githost-review-unmatched";
+      box.className = "ghc-unmatched";
       box.innerHTML =
-        `<div class="githost-review-unmatched-title">Comments not anchored to a visible line</div>` +
-        unmatched
-          .map(
-            (c) =>
-              `<div class="githost-review-comment">` +
-              `<div class="githost-review-comment-meta">${escapeHtml(c.path)}:L${c.line}</div>` +
-              `<div class="githost-review-comment-body">${escapeHtml(c.body)}</div>` +
-              `</div>`,
-          )
-          .join("");
+        `<div class="ghc-unmatched-title">Comments not anchored to a visible line</div>` +
+        unmatched.map(renderCommentCard).join("");
       wrapper.appendChild(box);
     }
   }

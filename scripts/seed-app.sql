@@ -54,3 +54,78 @@ VALUES
   (112, 'quick',      'passed',  'sha-112', NULL,                          1700000000000),
   (112, 'exhaustive', 'passed',  'sha-112', NULL,                          1700000000000);
 
+-- ---------------------------------------------------------------------------
+-- Local AI / CLI reviews with inline comments (PR detail unified-diff UI).
+-- Paths/lines match the stub diff returned for non-hex seed SHAs
+-- (see GET /api/prs/:number/diff in src/routes/api.ts).
+--
+-- Browse: open PR #1001 while signed in → "AI reviews (local)" + comments
+-- in the Diff section.
+-- ---------------------------------------------------------------------------
+
+INSERT OR REPLACE INTO ai_review
+  (id, repo_id, pr_id, pr_number, head_sha, model, status, summary,
+   comments_json, error_message, posted_upstream_at, upstream_review_id,
+   created_at, updated_at, deleted_at)
+VALUES
+  (
+    'seed-review-1001-claude',
+    1,
+    101,
+    1001,
+    'sha-101',
+    'claude-opus',
+    'ready',
+    'Seeded review for local UI demos. Inline notes are on README.md and src/example.f90.',
+    '[
+      {"path":"README.md","line":3,"body":"Nit: this line is only present in the local stub diff — good place to preview a single-line comment."},
+      {"path":"src/example.f90","line":2,"body":"Prefer explicit kinds: `integer(4) :: n, m` (or whatever the project convention is)."},
+      {"path":"src/example.f90","startLine":5,"line":7,"side":"RIGHT","body":"Multi-line note: this `if` is always true when `n >= 0`. Consider simplifying or documenting the invariant."}
+    ]',
+    NULL,
+    NULL,
+    NULL,
+    1700001000000,
+    1700001000000,
+    NULL
+  ),
+  (
+    'seed-review-1001-grok',
+    1,
+    101,
+    1001,
+    'sha-101',
+    'grok',
+    'ready',
+    'Second seeded review (same PR) so the list shows multiple agents.',
+    '[
+      {"path":"src/example.f90","line":4,"body":"Where does `n` get a value before `m = n + 1`? If it is undefined, this is a bug."},
+      {"path":"README.md","line":5,"body":"Thanks for the demo note — once you have real SHAs, this stub disappears automatically."}
+    ]',
+    NULL,
+    NULL,
+    NULL,
+    1700001100000,
+    1700001100000,
+    NULL
+  ),
+  (
+    'seed-review-1007-human',
+    1,
+    107,
+    1007,
+    'sha-107',
+    'human/alice',
+    'ready',
+    'Light touch on the typo PR — one inline comment only.',
+    '[
+      {"path":"src/example.f90","line":6,"body":"Optional: use `write(*,*)` if this codebase prefers Fortran I/O style."}
+    ]',
+    NULL,
+    NULL,
+    NULL,
+    1700001200000,
+    1700001200000,
+    NULL
+  );
+

@@ -28,8 +28,10 @@ cat <<'EOF'
     1. npm run dev              # builds web/dist, then wrangler (8787) + vite (5173)
     2. Prefer http://localhost:5173  (Vite HMR; live React source)
        http://localhost:8787 serves the last web/dist build (stale until rebuild)
-    3. Open /auth/dev-login   ← logs you in as "dev"
+    3. Open /auth/dev-login   ← logs you in as "dev" (or DEV_AUTO_LOGIN)
     4. Browse the PR list — title → GitHub, #number → githost (when signed in)
+    5. Open PR #1001 for seeded inline review comments on the unified diff
+       (also a shorter review on #1007)
 
   Re-seed any time:  npm run dev:seed
   Reset to empty:    rm -rf .wrangler/state && npm run db:apply:local

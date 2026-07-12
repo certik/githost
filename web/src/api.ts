@@ -40,6 +40,8 @@ export interface AiReview {
   id: string;
   prNumber: number;
   headSha: string;
+  /** Agent / human id from meta.model (may include "verdict:…" suffix). */
+  model: string;
   status: "pending" | "ready" | "posted" | "discarded" | "failed";
   summary: string | null;
   commentsJson: string | null;
@@ -57,6 +59,9 @@ export interface ReviewComment {
   reviewId: string;
   reviewStatus: AiReview["status"];
   headSha: string;
+  /** Display name for the author row (from review.model). */
+  author: string;
+  createdAt: number;
 }
 
 export interface Me {

@@ -396,17 +396,31 @@ apiRoutes.get("/prs/:number/diff", async (c) => {
   }
 
   // Local seed SHAs (e.g. "sha-101") are not real Git objects. Don't call GitHub.
+  // Keep this stub multi-file with stable line numbers so seed ai_review comments
+  // (scripts/seed-app.sql) can anchor in the PR detail UI.
   const looksLikeGitSha = /^[0-9a-f]{7,40}$/i.test(row.headSha);
   if (!looksLikeGitSha) {
     const stub =
       `diff --git a/README.md b/README.md\n` +
       `--- a/README.md\n+++ b/README.md\n` +
-      `@@ -1,3 +1,6 @@\n` +
+      `@@ -1,2 +1,5 @@\n` +
       ` # Local seed PR #${number}\n` +
-      `+\n` +
-      `+This is a stub diff for local development.\n` +
+      ` This is a stub diff for local development.\n` +
       `+headSha=${row.headSha} is not a real git object, so githost did not call GitHub.\n` +
-      `+Use a real GITHUB_APP_PRIVATE_KEY and mirrored PRs with real SHAs for live diffs.\n`;
+      `+Use a real GITHUB_APP_PRIVATE_KEY and mirrored PRs with real SHAs for live diffs.\n` +
+      `+Seeded inline comments (PR #1001) land on these lines for UI demos.\n` +
+      `diff --git a/src/example.f90 b/src/example.f90\n` +
+      `--- a/src/example.f90\n+++ b/src/example.f90\n` +
+      `@@ -1,4 +1,10 @@\n` +
+      ` program example\n` +
+      `-  integer :: n\n` +
+      `+  integer :: n, m\n` +
+      `   print *, "hello"\n` +
+      `+  m = n + 1\n` +
+      `+  if (m > 0) then\n` +
+      `+    print *, m\n` +
+      `+  end if\n` +
+      ` end program\n`;
     return new Response(stub, { headers: { "content-type": "text/plain; charset=utf-8" } });
   }
 
