@@ -44,7 +44,7 @@ githost does **not** call AI APIs. Agents only write a JSON file.
 ```bash
 # Local Worker must be running (npm run dev)
 ./cli/build/githost --url http://127.0.0.1:8787 login
-# Opens the browser → mints a session → writes ~/.githost/session
+# Prints a verification URL → open in browser → writes ~/.githost/session
 ```
 
 **One command** (shared instructions for Claude / Grok / Copilot / Codex / Pi):

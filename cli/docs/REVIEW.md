@@ -92,7 +92,7 @@ githost review list 12028
 
 Upload and list need a session (`gh_session`), same as the web app.
 
-**Recommended — browser login via CLI:**
+**Recommended — device-code browser login via CLI:**
 
 ```bash
 # Local (npm run dev on :8787)
@@ -105,7 +105,8 @@ Upload and list need a session (`gh_session`), same as the web app.
 ./cli/build/githost login
 ```
 
-This opens the browser, completes login, and writes `~/.githost/session`.
+The CLI prints a verification URL (no local TCP listener, no C stdlib sockets).
+Open it in a browser, authorize, and the CLI writes `~/.githost/session`.
 
 | Manual alternatives | How |
 |---|---|

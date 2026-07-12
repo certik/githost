@@ -3,7 +3,15 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { html as diffHtml, parse as diffParse } from "diff2html";
 import "diff2html/bundles/css/diff2html.min.css";
-import { api, ApiError, type PrSummary, type TestRun, type TestStatus } from "./api";
+import {
+  api,
+  ApiError,
+  type AiReview,
+  type PrSummary,
+  type ReviewComment,
+  type TestRun,
+  type TestStatus,
+} from "./api";
 import { groupForReviewPriority } from "./lib/review-priority";
 import { formatRelativeTime, formatAbsoluteTime } from "./lib/relative-time";
 import Logs from "./Logs";
@@ -553,6 +561,182 @@ function SkippedIcon() {
   );
 }
 
+function parseReviewComments(reviews: AiReview[]): ReviewComment[] {
+  const out: ReviewComment[] = [];
+  for (const r of reviews) {
+    if (!r.commentsJson) continue;
+    try {
+      const arr = JSON.parse(r.commentsJson) as Array<{
+        path?: string;
+        line?: number;
+        body?: string;
+        startLine?: number;
+        side?: string;
+      }>;
+      if (!Array.isArray(arr)) continue;
+      for (const c of arr) {
+        if (!c?.path || typeof c.line !== "number" || !c.body) continue;
+        out.push({
+          path: c.path,
+          line: c.line,
+          body: c.body,
+          startLine: typeof c.startLine === "number" ? c.startLine : undefined,
+          side: c.side,
+          reviewId: r.id,
+          reviewStatus: r.status,
+          headSha: r.headSha,
+        });
+      }
+    } catch {
+      /* ignore malformed commentsJson */
+    }
+  }
+  return out;
+}
+
+/** Normalize paths from review comments and diff2html file headers for matching. */
+function normalizePath(p: string): string {
+  let s = p.trim();
+  // "old → new" / "old -> new" renames: take the new path.
+  const arrow = s.match(/\s(?:→|->)\s(.+)$/);
+  if (arrow?.[1]) s = arrow[1].trim();
+  // Strip diff a/ b/ prefixes and leading ./
+  s = s.replace(/^[ab]\//, "").replace(/^\.\//, "");
+  return s;
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/**
+ * Inject review comments into a unified (line-by-line) diff2html document.
+ * Matches RIGHT-side (new file) line numbers by default; LEFT when side=LEFT.
+ */
+function injectCommentsIntoDiffHtml(html: string, comments: ReviewComment[]): string {
+  if (!html || comments.length === 0 || typeof DOMParser === "undefined") {
+    return html;
+  }
+
+  const byPath = new Map<string, ReviewComment[]>();
+  for (const c of comments) {
+    const key = normalizePath(c.path);
+    const list = byPath.get(key) ?? [];
+    list.push(c);
+    byPath.set(key, list);
+  }
+
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const files = doc.querySelectorAll(".d2h-file-wrapper");
+  for (const file of files) {
+    const nameEl =
+      file.querySelector(".d2h-file-name") ??
+      file.querySelector(".d2h-file-name-wrapper");
+    if (!nameEl) continue;
+    const filePath = normalizePath(nameEl.textContent ?? "");
+    // Try exact path, then basename fallback for seed stubs etc.
+    let fileComments = byPath.get(filePath);
+    if (!fileComments) {
+      const base = filePath.split("/").pop() ?? filePath;
+      for (const [k, v] of byPath) {
+        if (k === base || k.endsWith("/" + base) || base === k.split("/").pop()) {
+          fileComments = v;
+          break;
+        }
+      }
+    }
+    if (!fileComments?.length) continue;
+
+    const used = new Set<ReviewComment>();
+    const rows = file.querySelectorAll("tr");
+    for (const row of rows) {
+      // line-by-line: .line-num1 = old (LEFT), .line-num2 = new (RIGHT)
+      const num1 = row.querySelector(".line-num1")?.textContent?.trim() ?? "";
+      const num2 = row.querySelector(".line-num2")?.textContent?.trim() ?? "";
+      // Some themes put numbers only in td.d2h-code-linenumber text.
+      const tdNums = row.querySelectorAll("td.d2h-code-linenumber");
+      let left = num1;
+      let right = num2;
+      if (!left && !right && tdNums.length >= 1) {
+        const texts = Array.from(tdNums).map((td) =>
+          (td.textContent ?? "").trim().split(/\s+/).filter(Boolean),
+        );
+        const first = texts[0];
+        if (first && first.length === 2) {
+          left = first[0] ?? "";
+          right = first[1] ?? "";
+        } else if (tdNums.length >= 2) {
+          left = (tdNums.item(0)?.textContent ?? "").trim();
+          right = (tdNums.item(1)?.textContent ?? "").trim();
+        }
+      }
+
+      const matching = fileComments.filter((c) => {
+        if (used.has(c)) return false;
+        const side = (c.side ?? "RIGHT").toUpperCase();
+        const target = side === "LEFT" ? left : right;
+        if (!target || target === "0") return false;
+        return Number(target) === c.line;
+      });
+      if (matching.length === 0) continue;
+
+      const colCount = row.children.length || 2;
+      const commentRow = doc.createElement("tr");
+      commentRow.className = "githost-review-comment-row";
+      const td = doc.createElement("td");
+      td.colSpan = colCount;
+      td.className = "githost-review-comment-cell";
+
+      const blocks = matching
+        .map((c) => {
+          used.add(c);
+          const range =
+            c.startLine != null && c.startLine !== c.line
+              ? `L${c.startLine}–L${c.line}`
+              : `L${c.line}`;
+          return (
+            `<div class="githost-review-comment">` +
+            `<div class="githost-review-comment-meta">` +
+            `${escapeHtml(c.reviewStatus)} · ${escapeHtml(c.headSha.slice(0, 7))} · ${escapeHtml(range)}` +
+            `</div>` +
+            `<div class="githost-review-comment-body">${escapeHtml(c.body)}</div>` +
+            `</div>`
+          );
+        })
+        .join("");
+      td.innerHTML = blocks;
+      commentRow.appendChild(td);
+      row.parentNode?.insertBefore(commentRow, row.nextSibling);
+    }
+
+    // Comments that did not match any diff line: append under the file.
+    const unmatched = fileComments.filter((c) => !used.has(c));
+    if (unmatched.length > 0) {
+      const wrapper = file.querySelector(".d2h-file-diff") ?? file;
+      const box = doc.createElement("div");
+      box.className = "githost-review-unmatched";
+      box.innerHTML =
+        `<div class="githost-review-unmatched-title">Comments not anchored to a visible line</div>` +
+        unmatched
+          .map(
+            (c) =>
+              `<div class="githost-review-comment">` +
+              `<div class="githost-review-comment-meta">${escapeHtml(c.path)}:L${c.line}</div>` +
+              `<div class="githost-review-comment-body">${escapeHtml(c.body)}</div>` +
+              `</div>`,
+          )
+          .join("");
+      wrapper.appendChild(box);
+    }
+  }
+
+  return doc.body.innerHTML;
+}
+
 function PrDetail() {
   const { number } = useParams();
   const n = Number(number);
@@ -561,10 +745,20 @@ function PrDetail() {
   const [diff, setDiff] = useState<string>("");
   useEffect(() => { if (!isNaN(n)) api.diff(n).then(setDiff).catch(() => setDiff("")); }, [n]);
 
+  const inlineComments = useMemo(
+    () => (data ? parseReviewComments(data.reviews) : []),
+    [data],
+  );
+
   const diffRendered = useMemo(() => {
     if (!diff) return "";
-    return diffHtml(diffParse(diff), { drawFileList: true, matching: "lines", outputFormat: "side-by-side" });
-  }, [diff]);
+    const html = diffHtml(diffParse(diff), {
+      drawFileList: true,
+      matching: "lines",
+      outputFormat: "line-by-line",
+    });
+    return injectCommentsIntoDiffHtml(html, inlineComments);
+  }, [diff, inlineComments]);
 
   if (isLoading) return <div className="text-zinc-500">Loading…</div>;
   if (error)     return <div className="text-red-600 text-sm">{String((error as Error).message)}</div>;
@@ -592,21 +786,38 @@ function PrDetail() {
       {data.reviews.length > 0 && (
         <section className="mb-6 bg-white border rounded p-3">
           <h3 className="font-medium mb-2">AI reviews (local)</h3>
-          <ul className="space-y-2 text-sm">
-            {data.reviews.map(r => (
-              <li key={r.id} className="border-l-2 pl-2">
-                <div className="text-xs text-zinc-500">{r.status} · {r.headSha.slice(0, 7)}</div>
-                <div>{r.summary ?? <em className="text-zinc-400">(no summary yet)</em>}</div>
-              </li>
-            ))}
+          <ul className="space-y-3 text-sm">
+            {data.reviews.map(r => {
+              let nComments = 0;
+              try {
+                if (r.commentsJson) {
+                  const arr = JSON.parse(r.commentsJson);
+                  if (Array.isArray(arr)) nComments = arr.length;
+                }
+              } catch { /* ignore */ }
+              return (
+                <li key={r.id} className="border-l-2 border-amber-400 pl-2">
+                  <div className="text-xs text-zinc-500">
+                    {r.status} · {r.headSha.slice(0, 7)}
+                    {nComments > 0 ? ` · ${nComments} inline comment${nComments === 1 ? "" : "s"}` : ""}
+                  </div>
+                  <div className="mt-0.5">{r.summary ?? <em className="text-zinc-400">(no summary yet)</em>}</div>
+                </li>
+              );
+            })}
           </ul>
+          {inlineComments.length > 0 && (
+            <p className="text-xs text-zinc-500 mt-2">
+              Inline comments are shown in the unified diff below.
+            </p>
+          )}
         </section>
       )}
 
       <section>
         <h3 className="font-medium mb-2">Diff</h3>
         {diff
-          ? <div className="bg-white border rounded overflow-hidden" dangerouslySetInnerHTML={{ __html: diffRendered }} />
+          ? <div className="bg-white border rounded overflow-hidden githost-diff" dangerouslySetInnerHTML={{ __html: diffRendered }} />
           : <div className="text-zinc-500 text-sm">No diff available yet.</div>}
       </section>
     </div>

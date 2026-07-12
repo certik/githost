@@ -3,3 +3,40 @@
 @tailwind utilities;
 
 /* diff2html ships its own stylesheet; we import it from the component that uses it. */
+
+/* Inline review comments injected into the unified (line-by-line) diff. */
+.githost-diff .githost-review-comment-cell {
+  padding: 0 !important;
+  background: #fffbeb;
+  border-top: 1px solid #fcd34d;
+  border-bottom: 1px solid #fcd34d;
+}
+.githost-diff .githost-review-comment {
+  padding: 0.5rem 0.75rem;
+  border-left: 3px solid #f59e0b;
+  margin: 0.25rem 0.5rem 0.25rem 0;
+  background: #fffbeb;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 0.8125rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.githost-diff .githost-review-comment-meta {
+  color: #92400e;
+  font-size: 0.7rem;
+  margin-bottom: 0.2rem;
+}
+.githost-diff .githost-review-comment-body {
+  color: #18181b;
+  line-height: 1.4;
+}
+.githost-diff .githost-review-unmatched {
+  padding: 0.75rem;
+  background: #fafafa;
+  border-top: 1px solid #e4e4e7;
+}
+.githost-diff .githost-review-unmatched-title {
+  font-size: 0.75rem;
+  color: #71717a;
+  margin-bottom: 0.35rem;
+}

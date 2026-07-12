@@ -20,9 +20,8 @@ import { SESSION_COOKIE, sessionCookie } from "../lib/auth";
 export const authRoutes = new Hono<{ Bindings: Env }>();
 
 const STATE_COOKIE = "gh_oauth_state";
-/** When set, OAuth callback redirects to the CLI loopback instead of "/". */
-const CLI_PORT_COOKIE = "gh_cli_port";
-const CLI_STATE_COOKIE = "gh_cli_state";
+/** Set by GET /auth/cli-device when production OAuth is needed. */
+const CLI_USER_CODE_COOKIE = "gh_cli_user_code";
 const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 
 function cookiePair(name: string, value: string, maxAge: number): string {
@@ -122,17 +121,26 @@ authRoutes.get("/callback", async (c) => {
   c.header("Set-Cookie", sessionCookie(sessionId, SESSION_TTL_SECONDS));
   c.header("Set-Cookie", cookiePair(STATE_COOKIE, "", 0), { append: true });
 
-  // CLI browser-login: hand the session back to the local listener.
-  const cliPort = readCookie(c.req.header("cookie"), CLI_PORT_COOKIE);
-  const cliState = readCookie(c.req.header("cookie"), CLI_STATE_COOKIE);
-  if (cliPort && cliState) {
-    c.header("Set-Cookie", cookiePair(CLI_PORT_COOKIE, "", 0), { append: true });
-    c.header("Set-Cookie", cookiePair(CLI_STATE_COOKIE, "", 0), { append: true });
-    const u = new URL(`http://127.0.0.1:${cliPort}/`);
-    u.searchParams.set("session", sessionId);
-    u.searchParams.set("state", cliState);
-    u.searchParams.set("login", me.login);
-    return c.redirect(u.toString(), 302);
+  // CLI device-code login: authorize the pending device after GitHub OAuth.
+  const cliUserCode = readCookie(c.req.header("cookie"), CLI_USER_CODE_COOKIE);
+  if (cliUserCode) {
+    c.header("Set-Cookie", cookiePair(CLI_USER_CODE_COOKIE, "", 0), { append: true });
+    const deviceCode = await c.env.DIFF_CACHE.get(`cli-usr:${cliUserCode.toUpperCase()}`);
+    if (deviceCode) {
+      const pending = await loadDevice(c.env, deviceCode);
+      if (pending && Date.now() <= pending.expiresAt) {
+        pending.sessionId = sessionId;
+        pending.login = me.login;
+        await saveDevice(c.env, deviceCode, pending);
+        return c.html(
+          `<!doctype html><html><body style="font-family:system-ui;padding:2rem">
+           <h1>CLI authorized</h1>
+           <p>Logged in as <strong>@${me.login}</strong>.</p>
+           <p>Return to the terminal — <code>githost login</code> should finish shortly.</p>
+           </body></html>`,
+        );
+      }
+    }
   }
 
   return c.redirect("/", 302);
@@ -203,57 +211,191 @@ authRoutes.get("/dev-login", async (c) => {
 });
 
 /**
- * CLI browser login.
+ * CLI device-code login (no local TCP server — freestanding CLI friendly).
  *
- *   githost login  → opens /auth/cli-login?port=…&state=…
+ *   POST /auth/cli-device/start  { login?: string }
+ *     → { device_code, user_code, verification_uri_complete, interval, expires_in }
  *
- * Local (DEV_LOGIN_ENABLED): mint a session immediately and 302 to
- *   http://127.0.0.1:<port>/?session=…&state=…
+ *   GET  /auth/cli-device?user_code=XXXX
+ *     Browser: mint/confirm session and mark the device authorized.
  *
- * Production: stash port/state in cookies and run the normal GitHub OAuth
- * flow; /auth/callback then redirects to the CLI loopback with the session.
+ *   POST /auth/cli-device/poll   { device_code }
+ *     → { status: "pending" } | { status: "complete", session, login }
  */
-authRoutes.get("/cli-login", async (c) => {
-  const port = parseInt(c.req.query("port") ?? "", 10);
-  const state = c.req.query("state") ?? "";
-  if (!Number.isFinite(port) || port < 1024 || port > 65535) {
-    return c.text("bad port (expect 1024–65535)", 400);
+
+type CliDevicePending = {
+  userCode: string;
+  preferredLogin: string | null;
+  sessionId: string | null;
+  login: string | null;
+  expiresAt: number;
+};
+
+const CLI_DEVICE_TTL_SEC = 600;
+
+async function loadDevice(env: Env, deviceCode: string): Promise<CliDevicePending | null> {
+  const raw = await env.DIFF_CACHE.get(`cli-dev:${deviceCode}`);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as CliDevicePending;
+  } catch {
+    return null;
   }
-  if (!/^[A-Za-z0-9_-]{8,128}$/.test(state)) {
-    return c.text("bad state", 400);
+}
+
+async function saveDevice(env: Env, deviceCode: string, pending: CliDevicePending): Promise<void> {
+  const ttl = Math.max(30, Math.floor((pending.expiresAt - Date.now()) / 1000));
+  await env.DIFF_CACHE.put(`cli-dev:${deviceCode}`, JSON.stringify(pending), {
+    expirationTtl: ttl,
+  });
+}
+
+authRoutes.post("/cli-device/start", async (c) => {
+  const body = await c.req.json<{ login?: string }>().catch(() => ({} as { login?: string }));
+  const deviceCode = randomId(32);
+  const userCode = randomId(8).toUpperCase();
+  const preferredLogin = (body.login ?? c.env.DEV_AUTO_LOGIN_USER ?? "dev").slice(0, 39);
+  const pending: CliDevicePending = {
+    userCode,
+    preferredLogin,
+    sessionId: null,
+    login: null,
+    expiresAt: Date.now() + CLI_DEVICE_TTL_SEC * 1000,
+  };
+  await saveDevice(c.env, deviceCode, pending);
+  await c.env.DIFF_CACHE.put(`cli-usr:${userCode}`, deviceCode, {
+    expirationTtl: CLI_DEVICE_TTL_SEC,
+  });
+
+  const origin = new URL(c.req.url).origin;
+  const verification_uri = `${origin}/auth/cli-device`;
+  const verification_uri_complete = `${verification_uri}?user_code=${encodeURIComponent(userCode)}`;
+  return c.json({
+    device_code: deviceCode,
+    user_code: userCode,
+    verification_uri,
+    verification_uri_complete,
+    interval: 1,
+    expires_in: CLI_DEVICE_TTL_SEC,
+  });
+});
+
+authRoutes.post("/cli-device/poll", async (c) => {
+  const body = await c.req.json<{ device_code?: string }>().catch(() => null);
+  const deviceCode = body?.device_code?.trim() ?? "";
+  if (!deviceCode) return c.json({ error: "device_code required" }, 400);
+  const pending = await loadDevice(c.env, deviceCode);
+  if (!pending) return c.json({ status: "expired" });
+  if (Date.now() > pending.expiresAt) return c.json({ status: "expired" });
+  if (!pending.sessionId) return c.json({ status: "pending" });
+  return c.json({
+    status: "complete",
+    session: pending.sessionId,
+    login: pending.login ?? "?",
+  });
+});
+
+authRoutes.get("/cli-device", async (c) => {
+  const userCode = (c.req.query("user_code") ?? "").trim().toUpperCase();
+  if (!userCode) {
+    return c.html(
+      `<!doctype html><html><body style="font-family:system-ui;padding:2rem">
+       <h1>CLI login</h1>
+       <p>Missing <code>user_code</code>. Run <code>githost login</code> and open the printed URL.</p>
+       </body></html>`,
+      400,
+    );
   }
 
-  if (c.env.DEV_LOGIN_ENABLED === "true") {
-    const login = (c.req.query("login") ?? c.env.DEV_AUTO_LOGIN_USER ?? "dev").slice(0, 39);
-    const { sessionId } = await mintDevSession(
+  const deviceCode = await c.env.DIFF_CACHE.get(`cli-usr:${userCode}`);
+  if (!deviceCode) {
+    return c.html(
+      `<!doctype html><html><body style="font-family:system-ui;padding:2rem">
+       <h1>Code expired</h1>
+       <p>User code <strong>${userCode}</strong> is unknown or expired. Run <code>githost login</code> again.</p>
+       </body></html>`,
+      404,
+    );
+  }
+  const pending = await loadDevice(c.env, deviceCode);
+  if (!pending || Date.now() > pending.expiresAt) {
+    return c.html(
+      `<!doctype html><html><body style="font-family:system-ui;padding:2rem">
+       <h1>Code expired</h1>
+       <p>Run <code>githost login</code> again.</p>
+       </body></html>`,
+      404,
+    );
+  }
+
+  // Already authorized.
+  if (pending.sessionId) {
+    return c.html(
+      `<!doctype html><html><body style="font-family:system-ui;padding:2rem">
+       <h1>CLI authorized</h1>
+       <p>Logged in as <strong>@${pending.login ?? "?"}</strong>. You can close this tab.</p>
+       </body></html>`,
+    );
+  }
+
+  // Prefer an existing browser session; otherwise mint via dev-login.
+  const cookieSid = readCookie(c.req.header("cookie"), SESSION_COOKIE);
+  let sessionId: string | null = null;
+  let login: string | null = null;
+
+  if (cookieSid) {
+    const adb = appDb(c.env.APP_DB);
+    const row = await adb
+      .select({ id: A.userSession.id, login: A.appUser.login })
+      .from(A.userSession)
+      .innerJoin(A.appUser, eq(A.appUser.id, A.userSession.userId))
+      .where(eq(A.userSession.id, cookieSid))
+      .get();
+    if (row) {
+      sessionId = row.id;
+      login = row.login;
+    }
+  }
+
+  if (!sessionId && c.env.DEV_LOGIN_ENABLED === "true") {
+    const preferred = (pending.preferredLogin ?? "dev").slice(0, 39);
+    const minted = await mintDevSession(
       c.env,
-      login,
+      preferred,
       c.req.header("user-agent") ?? null,
     );
-    // Also set the browser cookie so the SPA on the same host is signed in.
+    sessionId = minted.sessionId;
+    login = minted.login;
     c.header("Set-Cookie", sessionCookie(sessionId, 30 * 24 * 60 * 60));
-    const u = new URL(`http://127.0.0.1:${port}/`);
-    u.searchParams.set("session", sessionId);
-    u.searchParams.set("state", state);
-    u.searchParams.set("login", login);
-    return c.redirect(u.toString(), 302);
   }
 
-  // Production / no dev-login: OAuth, then bounce back to the CLI.
-  c.header("Set-Cookie", cookiePair(CLI_PORT_COOKIE, String(port), 600), { append: true });
-  c.header("Set-Cookie", cookiePair(CLI_STATE_COOKIE, state, 600), { append: true });
+  if (!sessionId) {
+    // Production: send user through OAuth, remember user_code.
+    c.header("Set-Cookie", cookiePair(CLI_USER_CODE_COOKIE, userCode, 600), { append: true });
+    const oauthState = randomId(16);
+    const cb = new URL(c.req.url);
+    cb.pathname = "/auth/callback";
+    cb.search = "";
+    const url = new URL("https://github.com/login/oauth/authorize");
+    url.searchParams.set("client_id", c.env.GITHUB_OAUTH_CLIENT_ID);
+    url.searchParams.set("redirect_uri", cb.toString());
+    url.searchParams.set("state", oauthState);
+    url.searchParams.set("scope", "read:user");
+    c.header("Set-Cookie", cookiePair(STATE_COOKIE, oauthState, 600), { append: true });
+    return c.redirect(url.toString(), 302);
+  }
 
-  const oauthState = randomId(16);
-  const cb = new URL(c.req.url);
-  cb.pathname = "/auth/callback";
-  cb.search = "";
-  const url = new URL("https://github.com/login/oauth/authorize");
-  url.searchParams.set("client_id", c.env.GITHUB_OAUTH_CLIENT_ID);
-  url.searchParams.set("redirect_uri", cb.toString());
-  url.searchParams.set("state", oauthState);
-  url.searchParams.set("scope", "read:user");
-  c.header("Set-Cookie", cookiePair(STATE_COOKIE, oauthState, 600), { append: true });
-  return c.redirect(url.toString(), 302);
+  pending.sessionId = sessionId;
+  pending.login = login;
+  await saveDevice(c.env, deviceCode, pending);
+
+  return c.html(
+    `<!doctype html><html><body style="font-family:system-ui;padding:2rem">
+     <h1>CLI authorized</h1>
+     <p>Logged in as <strong>@${login ?? "?"}</strong>.</p>
+     <p>Return to the terminal — <code>githost login</code> should finish shortly.</p>
+     </body></html>`,
+  );
 });
 
 /**

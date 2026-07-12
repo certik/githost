@@ -142,21 +142,25 @@ static int http_perform(Arena *arena, const char *url, const char *cookie,
     }
     curl_easy_cleanup(curl);
 
-    if (code < 200 || code >= 300) {
-        gh_eprintf("githost: HTTP %ld for %s\n", code, url);
-        if (out->data && out->len > 0) {
-            size_t show = out->len > 200 ? 200 : out->len;
-            gh_eprintf("githost: body: %.*s\n", (int)show, out->data);
-        }
-        return -1;
-    }
-
+    /* Non-2xx is still a completed transfer; callers inspect *http_code.
+     * Only hard-fail on transport errors (above). Empty body → "". */
     if (!out->data) {
         if (buf_grow(out, 1) != 0) {
             return -1;
         }
         out->data[0] = '\0';
         out->len = 0;
+    }
+    if (code < 200 || code >= 300) {
+        /* Keep stderr noise for real failures; poll-pending uses 200. */
+        if (code != 401 && code != 404) {
+            gh_eprintf("githost: HTTP %ld for %s\n", code, url);
+            if (out->data && out->len > 0) {
+                size_t show = out->len > 200 ? 200 : out->len;
+                gh_eprintf("githost: body: %.*s\n", (int)show, out->data);
+            }
+        }
+        return -1;
     }
     return 0;
 }
