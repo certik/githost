@@ -125,3 +125,6 @@ void *gh_arena_grow(Arena *arena, void *old, size_t old_count, size_t new_count,
 
 /* Best-effort "now" in ms; uses newest PR timestamp if wall clock unavailable. */
 int64_t gh_now_ms(const gh_pr_list *list);
+
+/* Browser login: open /auth/cli-login, receive session on localhost callback. */
+int gh_cmd_login(Arena *arena, const char *base_url, const char *login_name);

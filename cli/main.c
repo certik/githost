@@ -15,6 +15,7 @@ static void usage(void)
         "  githost [global options]              # same as: pr list\n"
         "\n"
         "Commands:\n"
+        "  login            Browser login; saves ~/.githost/session\n"
         "  pr list          List open PRs grouped like the web UI\n"
         "  pr view <n>      Show details for PR number <n>\n"
         "  review           Local review upload (agent-agnostic JSON)\n"
@@ -42,9 +43,9 @@ static void usage(void)
         "Review workflow (any agent):\n"
         "  1. githost pr view <n>\n"
         "  2. Agent writes githost.review/v1 JSON (see cli/docs/REVIEW.md)\n"
-        "  3. githost review submit <n> --file review.v1.json\n"
-        "     (auth: GITHOST_SESSION=… or ~/.githost/session)\n"
-        "  4. Review appears in the web UI under local reviews\n"
+        "  3. githost login --url http://127.0.0.1:8787   # once\n"
+        "  4. githost review submit <n> --file review.v1.json\n"
+        "  5. Review appears in the web UI under local reviews\n"
         "\n"
         "  githost review init <n>              Write a JSON template\n"
         "  githost review submit <n> --file f   POST review to the server\n"
@@ -56,8 +57,41 @@ static void usage(void)
         "  githost pr list --passed\n"
         "  githost pr list --group conflict\n"
         "  githost pr view 12028\n"
+        "  githost login --url http://127.0.0.1:8787\n"
         "  githost review submit 12028 --file review.v1.json\n",
         GITHOST_DEFAULT_URL, GITHOST_DEFAULT_URL);
+}
+
+static int cmd_login(Arena *arena, const char *base_url, int argc, char **argv)
+{
+    const char *login_name = NULL;
+    int i;
+    for (i = 0; i < argc; i++) {
+        if (base_strcmp(argv[i], "--login") == 0 ||
+            base_strcmp(argv[i], "-u") == 0) {
+            if (i + 1 >= argc) {
+                gh_eprintf("githost: --login requires a name\n");
+                return 2;
+            }
+            login_name = argv[++i];
+        } else if (base_strcmp(argv[i], "-h") == 0 ||
+                   base_strcmp(argv[i], "--help") == 0) {
+            gh_printf(
+                "Usage: githost [--url URL] login [--login NAME]\n"
+                "\n"
+                "Opens a browser to the githost web app to create a session,\n"
+                "then saves it to ~/.githost/session for review submit/list.\n"
+                "\n"
+                "Local:  githost --url http://127.0.0.1:8787 login\n"
+                "        githost --url http://127.0.0.1:8787 login --login alice\n"
+                "Prod:   githost login   # GitHub OAuth via the deployed site\n");
+            return 0;
+        } else {
+            gh_eprintf("githost: unknown login option: %s\n", argv[i]);
+            return 2;
+        }
+    }
+    return gh_cmd_login(arena, base_url, login_name);
 }
 
 static int fetch_prs(Arena *arena, const char *base_url, gh_pr_list *list)
@@ -346,9 +380,9 @@ static int cmd_review_submit(Arena *arena, const char *base_url, int number,
     if (!session) {
         gh_eprintf(
             "githost: not authenticated.\n"
-            "  Set GITHOST_SESSION to your gh_session cookie value, or write\n"
-            "  it to ~/.githost/session (session id only is fine).\n"
-            "  Local: open /auth/dev-login then copy the gh_session cookie.\n");
+            "  Run:  githost --url %s login\n"
+            "  Or set GITHOST_SESSION / write the session id to ~/.githost/session\n",
+            base_url);
         return 1;
     }
     if (gh_read_file(arena, file_path, &json, NULL) != 0) {
@@ -534,6 +568,11 @@ int main(int argc, char **argv)
     if (base_strcmp(argv[i], "version") == 0) {
         gh_printf("githost %s\n", GITHOST_VERSION);
         rc = 0;
+        goto done;
+    }
+    if (base_strcmp(argv[i], "login") == 0) {
+        i++;
+        rc = cmd_login(arena, base_url, argc - i, argv + i);
         goto done;
     }
     if (base_strcmp(argv[i], "pr") == 0) {

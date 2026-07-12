@@ -174,10 +174,12 @@ UPDATE_REFS=1 ./cli/tests/run_tests.sh ./cli/build/githost   # refresh goldens
 
 See [`cli/README.md`](cli/README.md) for env vars and more commands.
 
-**Local reviews (agent-agnostic):** one launcher, shared instructions for every
-agent CLI:
+**CLI login + local reviews:**
 
 ```bash
+# Terminal A: npm run dev
+./cli/build/githost --url http://127.0.0.1:8787 login   # browser → ~/.githost/session
+
 npm run review -- 12028                      # or: ./cli/bin/githost-review 12028
 npm run review -- 12028 --agent claude --submit
 ```
