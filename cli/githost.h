@@ -43,11 +43,24 @@ enum gh_mergeable {
     GH_MERGEABLE_FALSE
 };
 
+/* Latest local AI review on the PR (mirrors SPA localReview). */
+enum gh_review_verdict {
+    GH_REVIEW_NONE = 0, /* no review yet */
+    GH_REVIEW_APPROVE,
+    GH_REVIEW_COMMENT,
+    GH_REVIEW_REQUEST_CHANGES
+};
+
 typedef struct {
     enum gh_test_status status;
     char head_sha[48];
     char log_url[512];
 } gh_test_run;
+
+typedef struct {
+    enum gh_review_verdict verdict;
+    char status[16]; /* "ready" / "posted" when present */
+} gh_local_review;
 
 typedef struct {
     int64_t id;
@@ -66,6 +79,7 @@ typedef struct {
     char html_url[256];
     gh_test_run quick;
     gh_test_run exhaustive;
+    gh_local_review local_review; /* GH_REVIEW_NONE if API sent null / omitted */
 } gh_pr;
 
 typedef struct {

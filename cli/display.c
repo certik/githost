@@ -209,17 +209,18 @@ int gh_parse_group_name(const char *name)
 /*
  * Fixed 80-column list layout (visible glyphs; ANSI codes excluded):
  *
- *   #12028 title (46)                            author (12)  5h  ✓ ✓ ✓
- *   |----7| |---------------46----------------| |----12----| |4| |--5--|
+ *   #12028 title (44)                          author (12)  5h  ✓ ○ ✓ ✓
+ *   |----7| |-------------44--------------| |----12----| |4| |----7----|
+ *   icons = "M R Q E" (merge, local review, quick, exhaustive)
  *   + spaces between fields + 2-space indent = 80
  */
 #define GH_COLS      80
 #define GH_W_INDENT  2
 #define GH_W_NUM     7
-#define GH_W_TITLE   46
+#define GH_W_TITLE   44
 #define GH_W_AUTHOR  12
 #define GH_W_AGE     4
-#define GH_W_ICONS   5
+#define GH_W_ICONS   7
 
 static void pad_spaces(int n)
 {
@@ -340,6 +341,39 @@ static void print_merge_icon(const gh_pr *pr, bool color)
     }
 }
 
+/* Same symbols as the SPA Rev column: ✓ approve, ✗ request changes, ○ comment, · none. */
+static void print_review_icon(const gh_pr *pr, bool color)
+{
+    switch (pr->local_review.verdict) {
+    case GH_REVIEW_APPROVE:
+        gh_printf("%s✓%s", S(color, C_GREEN), S(color, C_RESET));
+        break;
+    case GH_REVIEW_REQUEST_CHANGES:
+        gh_printf("%s✗%s", S(color, C_RED), S(color, C_RESET));
+        break;
+    case GH_REVIEW_COMMENT:
+        gh_printf("%s○%s", S(color, C_CYAN), S(color, C_RESET));
+        break;
+    default:
+        gh_printf("%s·%s", S(color, C_GRAY), S(color, C_RESET));
+        break;
+    }
+}
+
+static const char *gh_review_verdict_name(enum gh_review_verdict v)
+{
+    switch (v) {
+    case GH_REVIEW_APPROVE:
+        return "APPROVE";
+    case GH_REVIEW_COMMENT:
+        return "COMMENT";
+    case GH_REVIEW_REQUEST_CHANGES:
+        return "REQUEST_CHANGES";
+    default:
+        return NULL;
+    }
+}
+
 static void print_state_badge(const gh_pr *pr, bool color)
 {
     if (pr->merged) {
@@ -448,7 +482,7 @@ static void print_rule(bool color, const char *col)
 static void print_table_header(bool color)
 {
     /*
-     *   #       TITLE                                      AUTHOR        AGE  M Q E
+     *   #       TITLE                                    AUTHOR        AGE M R Q E
      * matches print_pr_row field widths exactly (80 cols).
      */
     gh_print(S(color, C_DIM));
@@ -461,14 +495,14 @@ static void print_table_header(bool color)
     gh_putchar(' ');
     print_field_right("AGE", GH_W_AGE);
     gh_putchar(' ');
-    gh_print("M Q E");
+    gh_print("M R Q E");
     gh_print(S(color, C_RESET));
     gh_putchar('\n');
 }
 
 /*
  * One PR, one line, exactly GH_COLS visible columns:
- *   <indent2><#num7> <title46> <author12> <age4> <M Q E>
+ *   <indent2><#num7> <title44> <author12> <age4> <M R Q E>
  */
 static void print_pr_row(const gh_pr *pr, bool color, int64_t now_ms)
 {
@@ -504,6 +538,8 @@ static void print_pr_row(const gh_pr *pr, bool color, int64_t now_ms)
     gh_putchar(' ');
 
     print_merge_icon(pr, color);
+    gh_putchar(' ');
+    print_review_icon(pr, color);
     gh_putchar(' ');
     print_test_icon(pr->quick.status, color);
     gh_putchar(' ');
@@ -560,8 +596,16 @@ static void emit_json_pr(const gh_pr *pr)
               gh_priority_label(gh_pr_priority(pr)));
     gh_printf("      \"quickTest\": \"%s\",\n",
               gh_test_status_name(pr->quick.status));
-    gh_printf("      \"exhaustiveTest\": \"%s\"\n",
+    gh_printf("      \"exhaustiveTest\": \"%s\",\n",
               gh_test_status_name(pr->exhaustive.status));
+    {
+        const char *rv = gh_review_verdict_name(pr->local_review.verdict);
+        if (rv) {
+            gh_printf("      \"localReview\": { \"verdict\": \"%s\" }\n", rv);
+        } else {
+            gh_print("      \"localReview\": null\n");
+        }
+    }
     gh_printf("    }");
 }
 
@@ -582,6 +626,20 @@ void gh_display_pr(const gh_pr *pr, bool color, int64_t now_ms)
     print_merge_icon(pr, color);
     gh_printf(" (%s)\n",
               pr->mergeable_state[0] ? pr->mergeable_state : "unknown");
+    gh_print("  Review:    ");
+    print_review_icon(pr, color);
+    {
+        const char *rv = gh_review_verdict_name(pr->local_review.verdict);
+        if (rv) {
+            gh_printf(" %s", rv);
+            if (pr->local_review.status[0]) {
+                gh_printf(" (%s)", pr->local_review.status);
+            }
+        } else {
+            gh_print(" no review yet");
+        }
+    }
+    gh_print("\n");
     gh_print("  Quick:     ");
     print_test_icon(pr->quick.status, color);
     gh_printf(" %s", gh_test_status_name(pr->quick.status));
