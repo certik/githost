@@ -222,13 +222,31 @@ function PrListHeader() {
   );
 }
 
-function PrRow({ p }: { p: PrSummary }) {
+function PrRow({ p, signedIn }: { p: PrSummary; signedIn: boolean }) {
   return (
     <li className="px-4 py-3 hover:bg-zinc-50 grid grid-cols-[1fr_6rem_8rem_3rem_4.5rem_4.5rem] gap-3 items-center">
-      <a href={p.htmlUrl} target="_blank" rel="noreferrer" className="flex items-baseline gap-2 min-w-0">
-        <span className="text-zinc-900 font-medium truncate hover:underline">{p.title}</span>
-        <span className="text-zinc-500 text-xs whitespace-nowrap">#{p.number} by {p.authorLogin ?? "?"}</span>
-      </a>
+      <div className="flex items-baseline gap-2 min-w-0">
+        {/* Title → GitHub. Number → githost detail only when signed in. */}
+        <a
+          href={p.htmlUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="text-zinc-900 font-medium truncate hover:underline min-w-0"
+          title="Open on GitHub"
+        >{p.title}</a>
+        <span className="text-zinc-500 text-xs whitespace-nowrap shrink-0">
+          {signedIn ? (
+            <Link
+              to={`/pr/${p.number}`}
+              className="hover:underline hover:text-zinc-800"
+              title="Open on githost"
+            >#{p.number}</Link>
+          ) : (
+            <span>#{p.number}</span>
+          )}
+          {" by "}{p.authorLogin ?? "?"}
+        </span>
+      </div>
       <span
         className="text-xs text-zinc-500 text-center tabular-nums whitespace-nowrap"
         title={`Updated ${formatAbsoluteTime(p.updatedAt)}`}
@@ -287,7 +305,7 @@ function PrListFlat({ items, signedIn }: { items: PrSummary[]; signedIn: boolean
   return (
     <ul className="divide-y rounded border bg-white text-sm">
       <PrListHeader />
-      {items.map((p) => <PrRow key={p.id} p={p} />)}
+      {items.map((p) => <PrRow key={p.id} p={p} signedIn={signedIn} />)}
       {items.length === 0 && (
         <li className="px-4 py-6 text-zinc-500 text-sm">
           No PRs yet. {signedIn ? "Hit “Manual refresh” to sync from GitHub." : "Sign in and hit “Manual refresh” to sync from GitHub."}
@@ -347,7 +365,7 @@ function PrListReviewPriority({ items, signedIn }: { items: PrSummary[]; signedI
                   </div>
                   <ul className="divide-y text-sm">
                     <PrListHeader />
-                    {g.items.map((p) => <PrRow key={p.id} p={p} />)}
+                    {g.items.map((p) => <PrRow key={p.id} p={p} signedIn={signedIn} />)}
                   </ul>
                 </div>
                 );
@@ -363,7 +381,7 @@ function PrListReviewPriority({ items, signedIn }: { items: PrSummary[]; signedI
           : (
             <ul className="divide-y rounded border bg-white text-sm">
               <PrListHeader />
-              {drafts.map((p) => <PrRow key={p.id} p={p} />)}
+              {drafts.map((p) => <PrRow key={p.id} p={p} signedIn={signedIn} />)}
             </ul>
           )}
       </section>
