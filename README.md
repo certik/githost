@@ -135,6 +135,11 @@ The `dev-login` endpoint bypasses GitHub OAuth and creates an `app_user` named
 `DEV_LOGIN_ENABLED="true"` is in `.dev.vars` — in production that var is
 unset and the endpoint returns 404. Asserted by tests.
 
+**Auto sign-in locally:** set `DEV_AUTO_LOGIN="true"` in `.dev.vars` (already in
+`.dev.vars.example`). The SPA calls `/api/me`, sees `dev.autoLogin`, and
+redirects to `/auth/dev-login` so every page load is signed in. To test the
+public/signed-out UI, set `DEV_AUTO_LOGIN="false"` (or omit it).
+
 ## CLI (`cli/`)
 
 A small pure-C client that queries `GET /api/prs` the same way the web UI does

@@ -19,3 +19,10 @@ TOKEN_ENCRYPTION_KEY="dGVzdC10b2tlbi1lbmNyeXB0aW9uLWtleS1jaGFuZ2UtbWUuLi4="
 # without going through GitHub OAuth (so wrangler dev / vite dev are usable
 # without registering localhost as a callback URL). Never set in production.
 DEV_LOGIN_ENABLED="true"
+
+# LOCAL DEV ONLY. When "true" (and DEV_LOGIN_ENABLED is true), the SPA auto-
+# redirects anonymous browsers to /auth/dev-login so you are signed in on first
+# load. Set to "false" to test the signed-out public list without logging in.
+DEV_AUTO_LOGIN="true"
+# Optional login name for auto-login (default "dev").
+# DEV_AUTO_LOGIN_USER="alice"

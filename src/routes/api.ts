@@ -32,9 +32,26 @@ const ANON_PRS_LIMIT = 50;
 
 // GET /api/me — who am I? (or null). Stays anonymous so the unauthenticated
 // SPA can still render its header.
+//
+// When local-dev auto-login is enabled, also returns a `dev` block so the SPA
+// can redirect to /auth/dev-login without a hard-coded frontend flag.
 apiRoutes.get("/me", async (c) => {
   const user = await loadSession(c);
-  return c.json({ user });
+  const devLogin = c.env.DEV_LOGIN_ENABLED === "true";
+  const autoLogin = devLogin && c.env.DEV_AUTO_LOGIN === "true";
+  const login = (c.env.DEV_AUTO_LOGIN_USER ?? "dev").slice(0, 39);
+  return c.json({
+    user,
+    dev: devLogin
+      ? {
+          autoLogin,
+          loginUrl: autoLogin
+            ? `/auth/dev-login?login=${encodeURIComponent(login)}`
+            : "/auth/dev-login",
+          login,
+        }
+      : null,
+  });
 });
 
 // GET /api/prs?state=open&limit=50&offset=0

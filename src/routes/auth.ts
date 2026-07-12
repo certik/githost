@@ -199,6 +199,9 @@ authRoutes.get("/signed-out", (c) => {
   <h1>You're signed out</h1>
   <p>Your session has ended. Click below to sign in again.</p>
   <a class="btn" href="/auth/login">Sign in with GitHub</a>
+  <p style="margin-top:1.5rem;font-size:0.85rem;color:#71717a">
+    Local dev? <a href="/auth/dev-login" style="color:#18181b">Dev login</a>
+  </p>
 </body>
 </html>`);
 });

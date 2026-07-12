@@ -40,6 +40,14 @@ export interface Env {
   // wrangler.toml [vars] and never via `wrangler secret put`. In production
   // this is undefined, so /auth/dev-login 404s.
   DEV_LOGIN_ENABLED?: string;
+
+  // Local-dev only — when "true" *and* DEV_LOGIN_ENABLED is "true", GET /api/me
+  // advertises autoLogin so the SPA redirects anonymous browsers to
+  // /auth/dev-login. Never set in production.
+  DEV_AUTO_LOGIN?: string;
+
+  // Optional login name for auto /dev-login (default "dev").
+  DEV_AUTO_LOGIN_USER?: string;
 }
 
 /**
