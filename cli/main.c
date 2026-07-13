@@ -29,6 +29,7 @@ static void usage(void)
         "\n"
         "pr list options:\n"
         "  --passed         Only \"Quick + Exhaustive passed\" (group 0)\n"
+        "  --unreviewed     Only PRs without a local review\n"
         "  --group <name>   Filter one priority group (see below)\n"
         "  --drafts         Include the Draft section\n"
         "  --all            Ready groups + drafts\n"
@@ -55,6 +56,7 @@ static void usage(void)
         "Examples:\n"
         "  githost\n"
         "  githost pr list --passed\n"
+        "  githost pr list --passed --unreviewed\n"
         "  githost pr list --group conflict\n"
         "  githost pr view 12028\n"
         "  githost login --url http://127.0.0.1:8787\n"
@@ -133,12 +135,15 @@ static int cmd_pr_list(Arena *arena, const char *base_url, int argc, char **argv
     opts.filter_priority = -1;
     opts.show_drafts = false;
     opts.show_closed = false;
+    opts.unreviewed_only = false;
     opts.json_out = false;
     opts.now_ms = 0;
 
     for (i = 0; i < argc; i++) {
         if (base_strcmp(argv[i], "--passed") == 0) {
             opts.filter_priority = GH_PRI_PASSED;
+        } else if (base_strcmp(argv[i], "--unreviewed") == 0) {
+            opts.unreviewed_only = true;
         } else if (base_strcmp(argv[i], "--group") == 0) {
             if (i + 1 >= argc) {
                 gh_eprintf("githost: --group requires a name or key\n");

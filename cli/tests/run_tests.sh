@@ -158,9 +158,11 @@ run_case() {
 # Cases exercise the public (anonymous) API the CLI uses today.
 run_case pr_list pr list
 run_case pr_list_passed pr list --passed
+run_case pr_list_passed_unreviewed pr list --passed --unreviewed
 run_case pr_list_all pr list --all
 run_case pr_view_1001 pr view 1001
 run_case pr_list_json pr list --passed --json
+run_case pr_list_passed_unreviewed_json pr list --passed --unreviewed --json
 
 # --- Authenticated review upload (POST /api/prs/:n/reviews) ---
 # Insert a durable test session into local app D1 (same state wrangler uses).

@@ -690,6 +690,10 @@ void gh_display_pr_list(Arena *arena, const gh_pr_list *list,
         if (!is_open) {
             continue;
         }
+        if (opts->unreviewed_only &&
+            pr->local_review.verdict != GH_REVIEW_NONE) {
+            continue;
+        }
 
         if (pr->draft) {
             if (!opts->show_drafts) {
