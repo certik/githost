@@ -33,6 +33,8 @@ Requirements: CMake ≥ 3.16, a C99 compiler, libcurl.
 
 # Against any base URL that serves GET /api/prs
 ./build/githost --url http://127.0.0.1:9XXX pr list --passed
+./build/githost pr list --passed --unreviewed
+./build/githost pr list --passed --unreviewed --json
 ```
 
 ### Local reviews (any agent)
@@ -52,6 +54,7 @@ githost does **not** call AI APIs. Agents only write a JSON file.
 ```bash
 ./cli/bin/githost-review 12028                 # auto-picks first agent on PATH
 ./cli/bin/githost-review 12028 --agent claude --submit
+./scripts/batch-review-passed.sh                # Copilot reviews all passed PRs without reviews
 ```
 
 Manual:

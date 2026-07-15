@@ -123,6 +123,7 @@ typedef struct {
     bool color;
     bool show_drafts;
     bool show_closed;
+    bool unreviewed_only;
     int filter_priority;     /* -1 = all ready groups */
     bool json_out;
     int64_t now_ms;          /* wall-ish clock for relative times; 0 = derive */

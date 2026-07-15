@@ -180,16 +180,40 @@ See [`cli/README.md`](cli/README.md) for env vars and more commands.
 
 **CLI login + local reviews:**
 
-```bash
-# Terminal A: npm run dev
-./cli/build/githost --url http://127.0.0.1:8787 login   # device-code URL → ~/.githost/session
+Prerequisites: authenticated `gh` and `copilot` CLIs, plus a githost production
+session created by `githost login`.
 
-npm run review -- 12028                      # or: ./cli/bin/githost-review 12028
-npm run review -- 12028 --agent claude --submit
+```bash
+# Build the CLI and authenticate to production once.
+npm run build:cli
+./cli/build/githost login
+
+# List passed PRs that do not have a local review.
+./cli/build/githost pr list --passed --unreviewed
+./cli/build/githost pr list --passed --unreviewed --json
+
+# Review one PR with Copilot and submit the review.
+npm run review -- 12028 --agent copilot --submit
+
+# Discover every passed, unreviewed PR, review each with Copilot, and submit.
+./scripts/batch-review-passed.sh
 ```
 
 Supported agents: **claude**, **grok**, **copilot**, **codex**, **pi** (or
-`--agent auto`). Spec: [`cli/docs/REVIEW.md`](cli/docs/REVIEW.md).
+`--agent auto`). `GITHOST_AGENT` changes the batch script's agent; explicit PR
+numbers override discovery, and `DRY_RUN=1` prints what would run without
+creating or submitting reviews:
+
+```bash
+GITHOST_AGENT=claude ./scripts/batch-review-passed.sh
+DRY_RUN=1 ./scripts/batch-review-passed.sh
+./scripts/batch-review-passed.sh 12179 12031
+```
+
+The batch script uses `githost pr list --passed --unreviewed --json` as its
+source of truth, writes agent output to `.githost/logs/review-<PR>.log`, and
+stops with a nonzero status if any review fails. Review schema and launcher
+details: [`cli/docs/REVIEW.md`](cli/docs/REVIEW.md).
 
 ### Fixture data
 
