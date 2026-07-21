@@ -6,6 +6,16 @@ cd "$(dirname "$0")/.."
 REVIEW=./cli/bin/githost-review
 GITHOST_BIN="${GITHOST_BIN:-./cli/build/githost}"
 AGENT="${GITHOST_AGENT:-copilot}"
+# Run the review agent in a dedicated source checkout so it can `gh pr checkout`
+# / switch branches freely without deleting this tooling (which lives on the
+# githost repo's own branch). Override with GITHOST_REVIEW_WORKDIR.
+export GITHOST_REVIEW_WORKDIR="${GITHOST_REVIEW_WORKDIR:-/Users/ondrej/repos/lfortran}"
+[[ -d "$GITHOST_REVIEW_WORKDIR" ]] || {
+  echo "error: GITHOST_REVIEW_WORKDIR does not exist: $GITHOST_REVIEW_WORKDIR" >&2
+  exit 1
+}
+# Guard: remember where this tooling checkout is; abort if anything moves it.
+TOOLING_REF="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached)"
 LOG_DIR=.githost/logs
 mkdir -p "$LOG_DIR" .githost/reviews
 
@@ -36,6 +46,19 @@ summary="$LOG_DIR/batch-summary.txt"
 for pr in "${PRS[@]}"; do
   log="$LOG_DIR/review-${pr}.log"
   echo "======== START PR #$pr $(date -u +%Y-%m-%dT%H:%M:%SZ) ========" | tee -a "$summary"
+
+  # Fail fast: if the tooling checkout was moved or the wrapper vanished,
+  # stop the whole batch instead of "FAIL"-ing through every remaining PR.
+  now_ref="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached)"
+  if [[ "$now_ref" != "$TOOLING_REF" ]]; then
+    echo "ABORT: tooling checkout moved ($TOOLING_REF -> $now_ref); stopping." | tee -a "$summary"
+    exit 1
+  fi
+  if [[ ! -x "$REVIEW" ]]; then
+    echo "ABORT: $REVIEW is missing; stopping." | tee -a "$summary"
+    exit 1
+  fi
+
   args=("$pr" --agent "$AGENT" --repo lfortran/lfortran)
   if [[ "${DRY_RUN:-}" == "1" ]]; then
     args+=(--dry-run)
