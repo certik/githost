@@ -60,8 +60,10 @@ Use the repo tools available to you. Typical sequence:
 
 1. `gh pr view <N> --json title,author,baseRefName,headRefName,headRefOid,body,url`
 2. `gh pr diff <N>`
-3. Optionally `gh pr checkout <N>` or read specific files at the PR head.
-4. Write `OUT_PATH` with the JSON document.
+3. Optionally `gh pr checkout <N>` or read specific files at the PR head. Do this
+   only in the working directory the task placed you in (a dedicated source
+   checkout) — that is where you may freely switch branches.
+4. Write `OUT_PATH` (an absolute path) with the JSON document.
 
 If `gh` is unavailable, use whatever git / filesystem context the task provides.
 

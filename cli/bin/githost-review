@@ -45,6 +45,9 @@ Environment:
   GITHOST_URL            API base URL for --submit
   GITHOST_BIN            Path to githost binary (default: cli/build/githost or PATH)
   GITHOST_REPO           owner/name for gh (e.g. lfortran/lfortran)
+  GITHOST_REVIEW_WORKDIR Directory to run the agent in (a dedicated source
+                         checkout). The agent may switch branches there without
+                         disturbing this tooling repo.
 
 Examples:
   githost-review 12028
@@ -133,6 +136,16 @@ done
 
 OUT="${OUT:-$REPO_ROOT/.githost/reviews/${PR}.v1.json}"
 mkdir -p "$(dirname "$OUT")"
+# Absolutize OUT so it still resolves after we cd into the review workdir.
+OUT="$(cd "$(dirname "$OUT")" && pwd)/$(basename "$OUT")"
+
+# Optional dedicated source checkout to run the agent in. The agent may freely
+# switch branches / `gh pr checkout` there without touching this tooling repo.
+WORKDIR="${GITHOST_REVIEW_WORKDIR:-}"
+if [[ -n "$WORKDIR" ]]; then
+  [[ -d "$WORKDIR" ]] || die "GITHOST_REVIEW_WORKDIR does not exist: $WORKDIR"
+  WORKDIR="$(cd "$WORKDIR" && pwd)"
+fi
 
 # --- Resolve owner/repo for gh ---
 if [[ -z "$REPO" ]]; then
@@ -257,7 +270,12 @@ if [[ "$DRY_RUN" == "1" ]]; then
   exit 0
 fi
 
-run_agent "$AGENT_NAME"
+if [[ -n "$WORKDIR" ]]; then
+  echo "githost-review: running agent in $WORKDIR"
+  ( cd "$WORKDIR" && run_agent "$AGENT_NAME" )
+else
+  run_agent "$AGENT_NAME"
+fi
 
 if [[ ! -f "$OUT" ]]; then
   die "agent finished but $OUT was not created"
