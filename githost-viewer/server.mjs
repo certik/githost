@@ -2,9 +2,10 @@
 /**
  * githost-viewer — fast static git commit browser with GitHub-style diffs.
  *
- * Strategy: ONE `git log -p` call at startup pulls every commit + full patch.
- * Everything is parsed and pre-rendered to static HTML strings in memory,
- * then served with zero per-request git work. `node server.mjs [repoPath]`
+ * Strategy: nothing is read at startup. Each request runs one `git log`/`git
+ * show` for just the page being served, parses it and renders static HTML,
+ * which is kept in a bounded LRU. Startup and resident memory are therefore
+ * independent of repository size. `node server.mjs [repoPath]`
  *
  * Styling: serves GitHub's own CSS (vendor/*.css, downloaded from
  * github.githubassets.com) and uses GitHub's real class names / inline
@@ -44,19 +45,26 @@ for (const f of readdirSync(vendorDir)) {
 }
 
 // ---------------------------------------------------------------- git layer
+// Nothing is preloaded. `git log` is asked only about the page actually being
+// served, and rendered HTML is kept in a bounded LRU, so a 28k-commit
+// repository with a multi-GB history costs the same at startup as a tiny one.
 
-function loadCommits() {
-  const t0 = Date.now();
-  // %P = parent hashes (space separated; empty for root, >1 for merges)
-  const fmt = '\x01%H\t%h\t%an\t%ae\t%aI\t%P\t%s\x02%B';
-  const r = spawnSync(
-    'git', ['-C', REPO, 'log', '--no-color', '-U3', `--format=${fmt}`],
-    { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 * 1024 },
-  );
-  if (r.status !== 0) throw new Error(`git log failed: ${r.stderr}`);
-  const out = r.stdout;
+const PAGE_SIZE = 100;                     // commits per index page
+const SHOW_MAXBUF = 512 * 1024 * 1024;     // hard ceiling for one commit's patch
+const MAX_PATCH_BYTES = 64 * 1024 * 1024;  // above this we don't render a diff
 
-  // Split into records on lines starting with \x01.
+function git(args, maxBuffer = 16 * 1024 * 1024) {
+  const r = spawnSync('git', ['-C', REPO, ...args], { encoding: 'utf8', maxBuffer });
+  if (r.error) return { ok: false, tooBig: r.error.code === 'ENOBUFS', out: '', err: String(r.error.message || r.error) };
+  if (r.status !== 0) return { ok: false, tooBig: false, out: '', err: r.stderr || `git exited with ${r.status}` };
+  return { ok: true, tooBig: false, out: r.stdout };
+}
+
+// %P = parent hashes (space separated; empty for root, >1 for merges)
+const LOG_FMT = '\x01%H\t%h\t%an\t%ae\t%aI\t%P\t%s\x02%B';
+
+// Split `git log` / `git show` output formatted with LOG_FMT into commits.
+function parseRecords(out) {
   const commits = [];
   let cur = null;
   for (const line of out.split('\n')) {
@@ -76,12 +84,50 @@ function loadCommits() {
   for (const c of commits) {
     const body = [c.tail, ...c.lines].join('\n'); // full message + (blank line) + patch
     const di = body.indexOf('\n\ndiff --git ');
-    if (di === -1) { c.message = body; c.patch = ''; }
+    // With no diff (a merge) `git show` pads the body with extra blank lines
+    // that `git log -p` does not; normalise so both render the same.
+    if (di === -1) { c.message = body.replace(/\n+$/, ''); c.patch = ''; }
     else { c.message = body.slice(0, di + 1); c.patch = body.slice(di + 2); }
     delete c.tail; delete c.lines;
-    c.files = parsePatch(c.patch);
+    c.files = [];
   }
-  return { commits, ms: Date.now() - t0, bytes: out.length };
+  return commits;
+}
+
+const headSha = () => { const r = git(['rev-parse', 'HEAD']); return r.ok ? r.out.trim() : ''; };
+const commitCount = () => { const r = git(['rev-list', '--count', 'HEAD']); return r.ok ? Number(r.out.trim()) : 0; };
+
+// One page of the commit list: metadata only, no patches.
+function logPage(skip, n) {
+  const r = git(['log', '--no-color', `--skip=${skip}`, '-n', String(n), `--format=${LOG_FMT}`], 64 * 1024 * 1024);
+  return r.ok ? parseRecords(r.out) : [];
+}
+
+// Resolve a hash prefix / branch / tag the way git itself does.
+function resolveRev(rev) {
+  if (rev.startsWith('-') || !/^[0-9A-Za-z._/~^-]{1,120}$/.test(rev)) return null;
+  const r = git(['rev-parse', '--verify', '--quiet', `${rev}^{commit}`]);
+  const sha = r.ok ? r.out.trim() : '';
+  return /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+}
+
+// One commit with its patch, parsed on demand.
+function loadCommit(sha) {
+  const r = git(['show', '--no-color', '-U3', `--format=${LOG_FMT}`, sha], SHOW_MAXBUF);
+  if (!r.ok) {
+    if (!r.tooBig) return null;
+    const meta = git(['show', '--no-color', '--no-patch', `--format=${LOG_FMT}`, sha]);
+    if (!meta.ok) return null;
+    const c = parseRecords(meta.out)[0];
+    if (c) c.patchTooBig = true;
+    return c || null;
+  }
+  const c = parseRecords(r.out)[0];
+  if (!c) return null;
+  if (c.patch.length > MAX_PATCH_BYTES) c.patchTooBig = true;
+  else c.files = parsePatch(c.patch);
+  c.patch = ''; // the parsed form is what we render from
+  return c;
 }
 
 const unquote = (s) => (s.startsWith('"') && s.endsWith('"') ? JSON.parse(s) : s);
@@ -96,12 +142,26 @@ function newFile(line) {
   };
 }
 
+// A single commit can carry a huge patch (vendored trees, generated code, an
+// import of somebody else's tree). One diff row costs ~800 bytes of GitHub's
+// markup, so an unbounded commit renders hundreds of MB nobody can read. Past
+// these caps we keep the file list and drop the line detail, as GitHub does.
+const MAX_DIFF_LINES = 20_000;       // diff lines rendered per commit
+const MAX_LINES_PER_FILE = 5_000;    // diff lines rendered per file
+const MAX_FILES = 300;               // files rendered per commit
+
 function parsePatch(patch) {
   const files = [];
   if (!patch || !patch.trim()) return files;
   let f = null;
+  let budget = MAX_DIFF_LINES;
   for (const line of patch.split('\n')) {
-    if (line.startsWith('diff --git ')) { f = newFile(line); files.push(f); continue; }
+    if (line.startsWith('diff --git ')) {
+      f = newFile(line);
+      files.push(f);
+      f.budget = files.length > MAX_FILES ? 0 : MAX_LINES_PER_FILE;
+      continue;
+    }
     if (!f) continue;
     if (line.startsWith('new file mode ')) { f.status = 'A'; continue; }
     if (line.startsWith('deleted file mode ')) { f.status = 'D'; continue; }
@@ -119,6 +179,13 @@ function parsePatch(patch) {
     }
     const h = f.hunks[f.hunks.length - 1];
     if (!h) continue; // mode-only / binary: no hunks
+    if (budget <= 0 || f.budget <= 0) {
+      // Still count what we drop, so the +/- totals stay honest.
+      f.truncated = true;
+      if (line[0] === '+') f.adds++; else if (line[0] === '-') f.dels++;
+      continue;
+    }
+    budget--; f.budget--;
     const t = line[0];
     if (t === '+') h.lines.push({ type: 'add', text: line.slice(1) });
     else if (t === '-') h.lines.push({ type: 'del', text: line.slice(1) });
@@ -278,7 +345,21 @@ ${body}
 </html>`;
 }
 
-function renderIndex(commits) {
+function pager(page, pages) {
+  if (pages <= 1) return '';
+  const btn = (href, label, off) => off
+    ? `<span class="btn btn-sm" style="pointer-events:none;opacity:.5">${label}</span>`
+    : `<a class="btn btn-sm" href="${href}">${label}</a>`;
+  return `<div class="d-flex flex-items-center flex-justify-center" style="gap:8px;margin-top:16px">
+  ${btn('/?page=1', 'Newest', page === 1)}
+  ${btn(`/?page=${page - 1}`, '&larr; Newer', page === 1)}
+  <span class="color-fg-muted" style="font-size:14px;padding:0 4px">Page ${page} of ${pages}</span>
+  ${btn(`/?page=${page + 1}`, 'Older &rarr;', page === pages)}
+  ${btn(`/?page=${pages}`, 'Oldest', page === pages)}
+</div>`;
+}
+
+function renderIndex(commits, page, pages, total) {
   const rows = commits.map((c) => `
 <div class="commit-row">
   <span class="avatar" style="width:32px;height:32px;font-size:12px;background:${avatarColor(c.an)};margin-top:2px">${esc(initials(c.an))}</span>
@@ -288,9 +369,10 @@ function renderIndex(commits) {
   </div>
   <div class="commit-side" style="text-align:right;font-size:12px;color:var(--fgColor-muted);white-space:nowrap;padding-top:2px">${esc(c.an)}<a class="hash" href="/${c.H}">${c.h}</a></div>
 </div>`).join('');
-  return pageShell(`${REPO_NAME} · commits`, `
-<div class="f4" style="font-weight:600;font-size:18px;margin-bottom:12px">Commits <span class="color-fg-muted" style="font-weight:400;font-size:14px">(${commits.length})</span></div>
-<div class="Box">${rows}</div>`);
+  const shown = pages > 1 ? `${(page - 1) * PAGE_SIZE + 1}–${(page - 1) * PAGE_SIZE + commits.length} of ${total}` : `${total}`;
+  return pageShell(`${REPO_NAME} · commits${pages > 1 ? ` · page ${page}` : ''}`, `
+<div class="f4" style="font-weight:600;font-size:18px;margin-bottom:12px">Commits <span class="color-fg-muted" style="font-weight:400;font-size:14px">(${shown})</span></div>
+<div class="Box">${rows}</div>${pager(page, pages)}`);
 }
 
 function diffRow(l) {
@@ -319,12 +401,15 @@ function renderFile(f) {
     inner = `<div class="color-fg-muted" style="padding:8px 16px;font-size:12px">Binary file${f.status === 'A' ? ' added' : f.status === 'D' ? ' deleted' : ''} — not shown.</div>`;
   } else if (!f.hunks.length) {
     inner = `<div class="color-fg-muted" style="padding:8px 16px;font-size:12px">No line changes (mode change only).</div>`;
+  } else if (f.truncated && !f.adds && !f.dels) {
+    inner = `<div class="color-fg-muted" style="padding:8px 16px;font-size:12px">Large diff not rendered.</div>`;
   } else {
     const rows = [];
     for (const h of f.hunks) {
       rows.push(`<tr class="diff-line-row"><td style="background-color:var(--bgColor-accent-muted, var(--color-accent-subtle));flex-grow:1" class="focusable-grid-cell diff-hunk-cell left-side" colSpan="4"><div class="d-flex flex-row"><code class="diff-text-cell hunk"><div class="diff-text-inner color-fg-muted">@@ -${h.oldStart} +${h.newStart}${h.heading ? ' @@ ' + esc(h.heading) : ''}</div></code></div></td></tr>`);
       for (const l of h.lines) rows.push(diffRow(l));
     }
+    if (f.truncated) rows.push(`<tr class="diff-line-row"><td class="focusable-grid-cell diff-hunk-cell left-side" colSpan="4"><div class="color-fg-muted" style="padding:8px 16px;font-size:12px">Diff truncated — the rest of this file's changes are not rendered.</div></td></tr>`);
     inner = `<table aria-label="Diff for: ${esc(f.newPath)}" class="tab-size width-full DiffLines-module__tableLayoutFixed__eh13Y" data-tab-size="4" style="--line-number-cell-width:40px;--line-number-cell-width-unified:80px"><colgroup><col width="40"/><col width="40"/><col width="100%"/></colgroup><tbody>${rows.join('')}</tbody></table>`;
   }
   const stats = (f.adds || f.dels) ? `<span class="f6 fgColor-success text-bold">+${f.adds}</span><span class="f6 fgColor-danger text-bold" style="margin-left:8px">-${f.dels}</span>` : '';
@@ -338,7 +423,10 @@ function renderFile(f) {
 }
 
 function renderCommit(c) {
-  const filesHtml = c.files.length ? c.files.map(renderFile).join('') : `<div class="Box color-fg-muted" style="padding:24px 16px;font-size:14px">No changes shown for this commit (merge or empty).</div>`;
+  const filesHtml = c.files.length ? c.files.map(renderFile).join('')
+    : `<div class="Box color-fg-muted" style="padding:24px 16px;font-size:14px">${c.patchTooBig
+      ? `This commit's diff is too large to render. Use <code>git show ${c.h}</code>.`
+      : 'No changes shown for this commit (merge or empty).'}</div>`;
   const parentsHtml = c.parents.length ? `
     <div class="color-fg-muted d-flex flex-items-center" style="gap:6px;margin-top:10px;font-size:14px">
       <span>${c.parents.length > 1 ? 'parents' : 'parent'}</span>
@@ -362,29 +450,70 @@ ${filesHtml}`;
   return pageShell(`${c.subject} · ${REPO_NAME}`, body);
 }
 
-// ---------------------------------------------------------------- build + serve
+// ---------------------------------------------------------------- serve
 
 const t0 = Date.now();
 REPO_NAME = path.basename(REPO);
-const { commits, ms: gitMs, bytes } = loadCommits();
-
-const pages = new Map();      // full hash -> html
-let totalBytes = 0;
-
-const t1 = Date.now();
-for (const c of commits) {
-  const html = renderCommit(c);
-  pages.set(c.H, html);
-  totalBytes += html.length;
+if (!git(['rev-parse', '--git-dir']).ok) {
+  console.error(`githost-viewer: ${REPO} is not a git repository`);
+  process.exit(1);
 }
-const indexHtml = renderIndex(commits);
-totalBytes += indexHtml.length;
 
-console.log(`githost-viewer: ${commits.length} commits, git took ${gitMs}ms (${(bytes / 1048576).toFixed(1)} MB), rendered ${(totalBytes / 1048576).toFixed(1)} MB of static HTML in ${Date.now() - t1}ms (total ${Date.now() - t0}ms)`);
+// Bounded LRU of rendered pages. Nothing is pre-rendered, so resident memory
+// stays flat no matter how large the repository or an individual commit is.
+const CACHE_MAX_ENTRIES = 200;
+const CACHE_MAX_BYTES = 128 * 1024 * 1024;
+const cache = new Map(); // key -> html, iterated in least-recently-used order
+let cacheBytes = 0;
+
+function cacheGet(key) {
+  const html = cache.get(key);
+  if (html === undefined) return null;
+  cache.delete(key); cache.set(key, html); // refresh recency
+  return html;
+}
+
+function cachePut(key, html) {
+  const old = cache.get(key);
+  if (old !== undefined) { cacheBytes -= old.length; cache.delete(key); }
+  cache.set(key, html); cacheBytes += html.length;
+  while (cache.size > 1 && (cache.size > CACHE_MAX_ENTRIES || cacheBytes > CACHE_MAX_BYTES)) {
+    const oldest = cache.keys().next().value;
+    cacheBytes -= cache.get(oldest).length;
+    cache.delete(oldest);
+  }
+  return html;
+}
+
+let cachedHead = headSha();
+
+function indexPage(want) {
+  const head = headSha();
+  if (head !== cachedHead) { cache.clear(); cacheBytes = 0; cachedHead = head; } // history moved
+  const total = commitCount();
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const page = Math.min(Math.max(1, want), pages);
+  const hit = cacheGet(`i:${page}`);
+  if (hit) return hit;
+  return cachePut(`i:${page}`, renderIndex(logPage((page - 1) * PAGE_SIZE, PAGE_SIZE), page, pages, total));
+}
+
+function commitPage(rev) {
+  const sha = resolveRev(rev);
+  if (!sha) return null;
+  const hit = cacheGet(`c:${sha}`);
+  if (hit) return hit;
+  const c = loadCommit(sha);
+  return c ? cachePut(`c:${sha}`, renderCommit(c)) : null;
+}
+
+console.log(`githost-viewer: ${REPO_NAME}, ${commitCount()} commits, rendered on demand (ready in ${Date.now() - t0}ms)`);
 
 const server = createServer((req, res) => {
+  let url;
+  try { url = new URL(req.url, 'http://localhost'); } catch { res.writeHead(400); return res.end('bad request'); }
   let p;
-  try { p = decodeURIComponent(new URL(req.url, 'http://localhost').pathname); } catch { res.writeHead(400); return res.end('bad request'); }
+  try { p = decodeURIComponent(url.pathname); } catch { res.writeHead(400); return res.end('bad request'); }
   p = p.replace(/\/+$/, '') || '/';
 
   if (p.startsWith('/vendor/')) {
@@ -394,12 +523,9 @@ const server = createServer((req, res) => {
   }
 
   let html = null;
-  if (p === '/') html = indexHtml;
-  else {
-    const key = p.slice(1);
-    if (pages.has(key)) html = pages.get(key);
-    else for (const [h, page] of pages) if (h.startsWith(key)) { html = page; break; } // any prefix works
-  }
+  if (p === '/') html = indexPage(Number(url.searchParams.get('page')) || 1);
+  else html = commitPage(p.slice(1));
+
   if (html === null) { res.writeHead(404, { 'content-type': 'text/plain' }); return res.end('not found'); }
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' });
   res.end(html);
